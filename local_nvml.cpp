@@ -101,12 +101,24 @@ struct GpuPairLink {
     int nvlinkCount;
 };
 
+struct CpuInfo {
+    int numaId;
+};
+
+struct TopologyNode {
+    union {
+        GpuInfo gpu;
+        CpuInfo cpu;
+    };
+    int type;
+};
+
 struct RankData {
-    char        hostname[HOST_SZ];
-    int         rank;
-    int         nGpus;
-    GpuInfo     gpus[MAX_GPUS];
-    GpuPairLink link[MAX_GPUS][MAX_GPUS];
+    char           hostname[HOST_SZ];
+    int            rank;
+    int            nTopologyNodes;
+    TopologyNode   nodes[MAX_GPUS];
+    GpuPairLink    link[MAX_GPUS][MAX_GPUS];
 };
 
 /* ==================================================================
@@ -162,11 +174,12 @@ static void collectLocal(RankData& D) {
 
     int nCuda = 0;
     CHK_CUDA(cudaGetDeviceCount(&nCuda));
-    D.nGpus = std::min(nCuda, MAX_GPUS);
+    D.nTopologyNodes = std::min(nCuda, MAX_GPUS);
 
     int nvmlIdx[MAX_GPUS];
-    for (int ci = 0; ci < D.nGpus; ci++) {
-        GpuInfo& G = D.gpus[ci];
+    for (int ci = 0; ci < D.nTopologyNodes; ci++) {
+        D.nodes[ci].type = 0;
+        GpuInfo& G = D.nodes[ci].gpu;
         nvmlIdx[ci] = -1;
 
         char cbid[BUSID_SZ] = {};
@@ -231,9 +244,9 @@ static void collectLocal(RankData& D) {
     }
 
     /* link[][] between visible GPUs only */
-    for (int i = 0; i < D.nGpus; i++) {
+    for (int i = 0; i < D.nTopologyNodes; i++) {
         D.link[i][i] = {0, 0};
-        for (int j = i + 1; j < D.nGpus; j++) {
+        for (int j = i + 1; j < D.nTopologyNodes; j++) {
             if (nvmlIdx[i] < 0 || nvmlIdx[j] < 0) {
                 D.link[i][j] = D.link[j][i] = {-1, 0};
                 continue;
@@ -244,8 +257,8 @@ static void collectLocal(RankData& D) {
             int topo = (r == NVML_SUCCESS) ? (int)lvl : -1;
 
             int nvl = 0;
-            for (int k = 0; k < D.gpus[i].nNvLinks; k++)
-                if (sameBus(D.gpus[i].nvLinks[k].remoteBusId, D.gpus[j].busId))
+            for (int k = 0; k < D.nodes[i].gpu.nNvLinks; k++)
+                if (sameBus(D.nodes[i].gpu.nvLinks[k].remoteBusId, D.nodes[j].gpu.busId))
                     nvl++;
 
             D.link[i][j] = D.link[j][i] = {topo, nvl};
@@ -295,8 +308,8 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
     auto isKnownGpu = [&](const char* bid) -> bool {
         for (auto& R : all) {
             if (std::string(R.hostname) != host) continue;
-            for (int g = 0; g < R.nGpus; g++)
-                if (sameBus(bid, R.gpus[g].busId)) return true;
+            for (int g = 0; g < R.nTopologyNodes; g++)
+                if (sameBus(bid, R.nodes[g].gpu.busId)) return true;
         }
         return false;
     };
@@ -354,19 +367,20 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
 
     for (int r = 0; r < ws; r++) {
         const RankData& R = all[r];
-        for (int i = 0; i < R.nGpus; i++) {
-            std::string u(R.gpus[i].uuid);
+        for (int i = 0; i < R.nTopologyNodes; i++) {
+            const GpuInfo& gi = R.nodes[i].gpu;
+            std::string u(gi.uuid);
             if (uid2g.count(u) == 0) {
                 GGpu g;
                 g.uuid    = u;
-                g.busId   = R.gpus[i].busId;
-                g.name    = R.gpus[i].name;
+                g.busId   = gi.busId;
+                g.name    = gi.name;
                 g.host    = R.hostname;
-                g.ccMajor = R.gpus[i].ccMajor;
-                g.ccMinor = R.gpus[i].ccMinor;
-                g.memMB   = R.gpus[i].memMB;
-                g.pcieGen = R.gpus[i].pcieGen;
-                g.pcieWidth = R.gpus[i].pcieWidth;
+                g.ccMajor = gi.ccMajor;
+                g.ccMinor = gi.ccMinor;
+                g.memMB   = gi.memMB;
+                g.pcieGen = gi.pcieGen;
+                g.pcieWidth = gi.pcieWidth;
                 g.srcRank = r;
                 g.gpuIdx  = i;
                 uid2g[u]  = (int)G.size();
@@ -393,8 +407,8 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
             if (i == j) { conn[i][j] = "X"; continue; }
             if (G[i].host != G[j].host) { conn[i][j] = "NET"; continue; }
 
-            const GpuInfo& gi = all[G[i].srcRank].gpus[G[i].gpuIdx];
-            const GpuInfo& gj = all[G[j].srcRank].gpus[G[j].gpuIdx];
+            const GpuInfo& gi = all[G[i].srcRank].nodes[G[i].gpuIdx].gpu;
+            const GpuInfo& gj = all[G[j].srcRank].nodes[G[j].gpuIdx].gpu;
 
             if (G[i].srcRank == G[j].srcRank) {
                 const GpuPairLink& lk = all[G[i].srcRank].link[G[i].gpuIdx][G[j].gpuIdx];
@@ -441,14 +455,15 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
     printf("\n--- Per-Rank GPU Assignment ---\n\n");
     for (int r = 0; r < ws; r++) {
         const RankData& R = all[r];
-        printf("  Rank %-3d @ %-20s  %d GPU(s)\n", r, R.hostname, R.nGpus);
-        for (int i = 0; i < R.nGpus; i++) {
+        printf("  Rank %-3d @ %-20s  %d node(s)\n", r, R.hostname, R.nTopologyNodes);
+        for (int i = 0; i < R.nTopologyNodes; i++) {
+            const GpuInfo& gi = R.nodes[i].gpu;
             printf("    cuda:%d -> %s [%s] %lu MB PCIe-Gen%d x%d",
-                   i, R.gpus[i].busId, R.gpus[i].name,
-                   (unsigned long)R.gpus[i].memMB,
-                   R.gpus[i].pcieGen, R.gpus[i].pcieWidth);
-            if (R.gpus[i].ccMajor)
-                printf(" CC %d.%d", R.gpus[i].ccMajor, R.gpus[i].ccMinor);
+                   gi.deviceId, gi.busId, gi.name,
+                   (unsigned long)gi.memMB,
+                   gi.pcieGen, gi.pcieWidth);
+            if (gi.ccMajor)
+                printf(" CC %d.%d", gi.ccMajor, gi.ccMinor);
             printf("\n");
         }
     }
