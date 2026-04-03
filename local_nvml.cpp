@@ -79,6 +79,11 @@ struct GpuInfo {
     NvLinkPeer nvLinks[MAX_LINKS];
 };
 
+struct GpuPairLink {
+    int pcieTopo;     // nvmlGpuTopologyLevel_t (0=INTERNAL,10=PIX,20=PXB,30=PHB,40=NODE,50=SYS)
+    int nvlinkCount;  // direct NVLink count between the pair (0 = none)
+};
+
 struct RankData {
     char     hostname[HOST_SZ];
     int      rank;
@@ -89,8 +94,7 @@ struct RankData {
     int      nVisGpus;
     int      visIdx[MAX_GPUS];
 
-    int      topo[MAX_GPUS][MAX_GPUS];
-    int      directNvl[MAX_GPUS][MAX_GPUS];
+    GpuPairLink link[MAX_GPUS][MAX_GPUS];
 };
 
 /* ==================================================================
@@ -182,18 +186,6 @@ static void collectLocal(RankData& D) {
         }
     }
 
-    /* ---- PCIe topology matrix ---- */
-    for (int i = 0; i < D.nNodeGpus; i++) {
-        D.topo[i][i] = 0;
-        for (int j = i + 1; j < D.nNodeGpus; j++) {
-            nvmlGpuTopologyLevel_t lvl;
-            nvmlReturn_t r = nvmlDeviceGetTopologyCommonAncestor(
-                                 hDev[i], hDev[j], &lvl);
-            int val = (r == NVML_SUCCESS) ? (int)lvl : -1;
-            D.topo[i][j] = D.topo[j][i] = val;
-        }
-    }
-
     /* ---- NVLink peer info (stored per-GPU) ---- */
     for (int i = 0; i < D.nNodeGpus; i++) {
         int cnt = 0;
@@ -213,15 +205,23 @@ static void collectLocal(RankData& D) {
             }
         }
         D.gpus[i].nNvLinks = cnt;
+    }
 
-        /* direct NVLink count between GPU i and every other node GPU */
-        for (int j = 0; j < D.nNodeGpus; j++) {
-            if (i == j) continue;
-            int n = 0;
-            for (int k = 0; k < cnt; k++)
+    /* ---- Pairwise link info (PCIe topology + direct NVLink count) ---- */
+    for (int i = 0; i < D.nNodeGpus; i++) {
+        D.link[i][i] = {0, 0};
+        for (int j = i + 1; j < D.nNodeGpus; j++) {
+            nvmlGpuTopologyLevel_t lvl;
+            nvmlReturn_t r = nvmlDeviceGetTopologyCommonAncestor(
+                                 hDev[i], hDev[j], &lvl);
+            int topo = (r == NVML_SUCCESS) ? (int)lvl : -1;
+
+            int nvl = 0;
+            for (int k = 0; k < D.gpus[i].nNvLinks; k++)
                 if (sameBus(D.gpus[i].nvLinks[k].remoteBusId, D.gpus[j].busId))
-                    n++;
-            D.directNvl[i][j] = n;
+                    nvl++;
+
+            D.link[i][j] = D.link[j][i] = {topo, nvl};
         }
     }
 
@@ -336,10 +336,11 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
             }
             if (!pR) { conn[i][j] = "?"; continue; }
 
+            const GpuPairLink& lk = pR->link[li][lj];
+
             /* direct NVLink */
-            int dNvl = pR->directNvl[li][lj];
-            if (dNvl > 0) {
-                conn[i][j] = "NV" + std::to_string(dNvl);
+            if (lk.nvlinkCount > 0) {
+                conn[i][j] = "NV" + std::to_string(lk.nvlinkCount);
                 continue;
             }
 
@@ -363,7 +364,7 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
             }
 
             /* fallback to PCIe topology */
-            conn[i][j] = topoTag(pR->topo[li][lj]);
+            conn[i][j] = topoTag(lk.pcieTopo);
         }
     }
 
