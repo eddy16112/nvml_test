@@ -413,7 +413,19 @@ struct RankManager {
     std::map<HandlePair, std::string> topology;
 
     void buildTopology(const std::vector<RankData>& allRanks);
+
+    std::string query(const Handle& src, const Handle& dst) const {
+        auto it = topology.find(std::make_pair(src, dst));
+        return (it != topology.end()) ? it->second : "";
+    }
 };
+
+static std::string queryConnection(const std::vector<RankManager>& managers,
+                                   const Handle& src, const Handle& dst) {
+    if (src.rank < 0 || src.rank >= (int)managers.size())
+        return "";
+    return managers[src.rank].query(src, dst);
+}
 
 /* ==================================================================
  *  Phase 3 – build topology maps (one per RankManager)
@@ -644,6 +656,55 @@ int main(int argc, char** argv) {
     if (gRank == 0) {
         printf("[Phase 4] Printing global topology ...\n");
         printTopology(managers);
+    }
+
+    /* Phase 5 – queryConnection tests (rank 0 only) */
+    if (gRank == 0 && ws >= 1) {
+        printf("\n--- queryConnection Tests ---\n\n");
+
+        auto mkGpuHandle = [](int rank, int devId) -> Handle {
+            Handle h;
+            h.rank = rank;
+            h.type = GPU_HANDLE;
+            h.gpu.deviceId = devId;
+            return h;
+        };
+
+        auto printTest = [&](const char* label,
+                             const Handle& src, const Handle& dst) {
+            std::string conn = queryConnection(managers, src, dst);
+            printf("  %-20s  (rank%d:gpu%d -> rank%d:gpu%d) = %s\n",
+                   label,
+                   src.rank, src.gpu.deviceId,
+                   dst.rank, dst.gpu.deviceId,
+                   conn.empty() ? "(not found)" : conn.c_str());
+        };
+
+        /* Test 1: local -> local (rank 0 GPU 0 -> rank 0 GPU 1) */
+        if (managers[0].data.nTopologyNodes >= 2) {
+            printTest("local->local",
+                      mkGpuHandle(0, 0), mkGpuHandle(0, 1));
+        } else {
+            printf("  local->local      : skipped (rank 0 has < 2 GPUs)\n");
+        }
+
+        /* Test 2: local -> remote (rank 0 GPU 0 -> rank 1 GPU 0) */
+        if (ws >= 2) {
+            printTest("local->remote",
+                      mkGpuHandle(0, 0), mkGpuHandle(1, 0));
+        } else {
+            printf("  local->remote     : skipped (only 1 rank)\n");
+        }
+
+        /* Test 3: remote -> remote (rank 1 GPU 0 -> rank 1 GPU 1) */
+        if (ws >= 2 && managers[1].data.nTopologyNodes >= 2) {
+            printTest("remote->remote",
+                      mkGpuHandle(1, 0), mkGpuHandle(1, 1));
+        } else {
+            printf("  remote->remote    : skipped (need rank 1 with >= 2 GPUs)\n");
+        }
+
+        printf("\n");
     }
 
     MPI_Finalize();
