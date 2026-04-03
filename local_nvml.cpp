@@ -29,6 +29,7 @@
 #include <map>
 #include <set>
 #include <algorithm>
+#include <utility>
 #include <unistd.h>
 
 #include <mpi.h>
@@ -62,8 +63,8 @@ static int gRank = 0;
     }                                                              \
 } while (0)
 
-
 #define PHASE3_USE_NVML
+
 /* ==================================================================
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
@@ -105,12 +106,39 @@ struct CpuInfo {
     int numaId;
 };
 
+enum HandleType {
+    GPU_HANDLE = 0,
+    CPU_HANDLE = 1,
+};
+
+struct Handle {
+    int rank;
+    union {
+        struct { int deviceId; } gpu;
+        struct { int numaId;  } cpu;
+    };
+    HandleType type;
+};
+
+inline bool operator<(const Handle& a, const Handle& b) {
+    if (a.rank != b.rank) return a.rank < b.rank;
+    if (a.type != b.type) return a.type < b.type;
+    if (a.type == GPU_HANDLE) return a.gpu.deviceId < b.gpu.deviceId;
+    return a.cpu.numaId < b.cpu.numaId;
+}
+
+inline bool operator==(const Handle& a, const Handle& b) {
+    if (a.rank != b.rank || a.type != b.type) return false;
+    if (a.type == GPU_HANDLE) return a.gpu.deviceId == b.gpu.deviceId;
+    return a.cpu.numaId == b.cpu.numaId;
+}
+
 struct TopologyNode {
+    Handle handle;
     union {
         GpuInfo gpu;
         CpuInfo cpu;
     };
-    int type;
 };
 
 struct RankData {
@@ -148,6 +176,98 @@ static const char* topoTag(int t) {
     }
 }
 
+static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
+    int n = 0;
+    for (int k = 0; k < gi.nNvLinks; k++)
+        if (gi.nvLinks[k].active && sameBus(gi.nvLinks[k].remoteBusId, peerBusId))
+            n++;
+    return n;
+}
+
+static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
+                              const std::vector<RankData>& allRanks,
+                              const std::string& host) {
+    auto isKnownGpu = [&](const char* bid) -> bool {
+        for (auto& R : allRanks) {
+            if (std::string(R.hostname) != host) continue;
+            for (int g = 0; g < R.nTopologyNodes; g++)
+                if (sameBus(bid, R.nodes[g].gpu.busId)) return true;
+        }
+        return false;
+    };
+
+    std::map<std::string, int> swI, swJ;
+    for (int k = 0; k < gi.nNvLinks; k++)
+        if (gi.nvLinks[k].active && !isKnownGpu(gi.nvLinks[k].remoteBusId))
+            swI[busKey(gi.nvLinks[k].remoteBusId)]++;
+    for (int k = 0; k < gj.nNvLinks; k++)
+        if (gj.nvLinks[k].active && !isKnownGpu(gj.nvLinks[k].remoteBusId))
+            swJ[busKey(gj.nvLinks[k].remoteBusId)]++;
+
+    int n = 0;
+    for (auto& kv : swI)
+        if (swJ.count(kv.first)) n += kv.second;
+    return n;
+}
+
+#ifdef PHASE3_USE_NVML
+static int queryPcieTopo(const char* busIdA, const char* busIdB) {
+    nvmlDevice_t a, b;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busIdB, &b) != NVML_SUCCESS) return -1;
+    nvmlGpuTopologyLevel_t lvl;
+    if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
+    return (int)lvl;
+}
+#endif
+
+static std::string resolveCrossRankPcie(const GpuInfo& gi, const GpuInfo& gj) {
+#ifdef PHASE3_USE_NVML
+    return topoTag(queryPcieTopo(gi.busId, gj.busId));
+#else
+    int pt = -1;
+    for (int k = 0; k < gi.nPeerTopos && pt < 0; k++)
+        if (sameBus(gi.peerTopos[k].busId, gj.busId))
+            pt = gi.peerTopos[k].pcieTopo;
+    for (int k = 0; k < gj.nPeerTopos && pt < 0; k++)
+        if (sameBus(gj.peerTopos[k].busId, gi.busId))
+            pt = gj.peerTopos[k].pcieTopo;
+    return topoTag(pt);
+#endif
+}
+
+static std::string resolveConnection(
+        const GpuInfo& gi, int srcIdx,
+        const GpuInfo& gj, int dstIdx,
+        const RankData& srcRank, const RankData& dstRank,
+        bool sameRank, bool sameNode,
+        const std::vector<RankData>& allRanks) {
+
+    if (srcIdx == dstIdx && sameRank)
+        return "X";
+
+    if (!sameNode)
+        return "NET";
+
+    if (sameRank) {
+        const GpuPairLink& lk = srcRank.link[srcIdx][dstIdx];
+        if (lk.nvlinkCount > 0)
+            return "NV" + std::to_string(lk.nvlinkCount);
+        int nvs = countNvSwitchLinks(gi, gj, allRanks, std::string(srcRank.hostname));
+        if (nvs > 0)
+            return "NV" + std::to_string(nvs);
+        return topoTag(lk.pcieTopo);
+    }
+
+    int nvl = countNvLinksByBusId(gi, gj.busId);
+    if (nvl > 0)
+        return "NV" + std::to_string(nvl);
+    int nvs = countNvSwitchLinks(gi, gj, allRanks, std::string(srcRank.hostname));
+    if (nvs > 0)
+        return "NV" + std::to_string(nvs);
+    return resolveCrossRankPcie(gi, gj);
+}
+
 /* ==================================================================
  *  Phase 1 – local collection  (NVML + CUDA allowed)
  * ================================================================== */
@@ -178,7 +298,9 @@ static void collectLocal(RankData& D) {
 
     int nvmlIdx[MAX_GPUS];
     for (int ci = 0; ci < D.nTopologyNodes; ci++) {
-        D.nodes[ci].type = 0;
+        D.nodes[ci].handle.rank = D.rank;
+        D.nodes[ci].handle.type = GPU_HANDLE;
+        D.nodes[ci].handle.gpu.deviceId = ci;
         GpuInfo& G = D.nodes[ci].gpu;
         nvmlIdx[ci] = -1;
 
@@ -243,7 +365,6 @@ static void collectLocal(RankData& D) {
         }
     }
 
-    /* link[][] between visible GPUs only */
     for (int i = 0; i < D.nTopologyNodes; i++) {
         D.link[i][i] = {0, 0};
         for (int j = i + 1; j < D.nTopologyNodes; j++) {
@@ -282,7 +403,62 @@ static void exchange(const RankData& local, std::vector<RankData>& all) {
 }
 
 /* ==================================================================
- *  Phase 3 – global topology analysis & print
+ *  RankManager – owns RankData + per-rank topology map
+ * ================================================================== */
+
+typedef std::pair<Handle, Handle> HandlePair;
+
+struct RankManager {
+    RankData data;
+    std::map<HandlePair, std::string> topology;
+
+    void buildTopology(const std::vector<RankData>& allRanks);
+};
+
+/* ==================================================================
+ *  Phase 3 – build topology maps (one per RankManager)
+ * ================================================================== */
+
+void RankManager::buildTopology(const std::vector<RankData>& allRanks) {
+    topology.clear();
+
+#ifdef PHASE3_USE_NVML
+    CHK_NVML(nvmlInit_v2());
+#endif
+
+    const std::string myHost(data.hostname);
+
+    for (int si = 0; si < data.nTopologyNodes; si++) {
+        const Handle& src = data.nodes[si].handle;
+        const GpuInfo& gi = data.nodes[si].gpu;
+
+        for (size_t r = 0; r < allRanks.size(); r++) {
+            const RankData& dstRank = allRanks[r];
+            bool sameRank = ((int)r == data.rank);
+            bool sameNode = (std::string(dstRank.hostname) == myHost);
+
+            for (int di = 0; di < dstRank.nTopologyNodes; di++) {
+                const Handle& dst = dstRank.nodes[di].handle;
+                const GpuInfo& gj = dstRank.nodes[di].gpu;
+
+                std::string conn = resolveConnection(
+                    gi, si, gj, di,
+                    data, dstRank,
+                    sameRank, sameNode,
+                    allRanks);
+
+                topology[std::make_pair(src, dst)] = conn;
+            }
+        }
+    }
+
+#ifdef PHASE3_USE_NVML
+    CHK_NVML(nvmlShutdown());
+#endif
+}
+
+/* ==================================================================
+ *  Phase 4 – print global topology from all RankManagers
  * ================================================================== */
 
 struct GGpu {
@@ -290,83 +466,19 @@ struct GGpu {
     int  ccMajor, ccMinor;
     uint64_t memMB;
     int  pcieGen, pcieWidth;
-    int  srcRank, gpuIdx;
+    Handle handle;
     std::vector<int> ownerRanks;
 };
 
-static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
-    int n = 0;
-    for (int k = 0; k < gi.nNvLinks; k++)
-        if (gi.nvLinks[k].active && sameBus(gi.nvLinks[k].remoteBusId, peerBusId))
-            n++;
-    return n;
-}
-
-static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
-                              const std::vector<RankData>& all,
-                              const std::string& host) {
-    auto isKnownGpu = [&](const char* bid) -> bool {
-        for (auto& R : all) {
-            if (std::string(R.hostname) != host) continue;
-            for (int g = 0; g < R.nTopologyNodes; g++)
-                if (sameBus(bid, R.nodes[g].gpu.busId)) return true;
-        }
-        return false;
-    };
-
-    std::map<std::string, int> swI, swJ;
-    for (int k = 0; k < gi.nNvLinks; k++)
-        if (gi.nvLinks[k].active && !isKnownGpu(gi.nvLinks[k].remoteBusId))
-            swI[busKey(gi.nvLinks[k].remoteBusId)]++;
-    for (int k = 0; k < gj.nNvLinks; k++)
-        if (gj.nvLinks[k].active && !isKnownGpu(gj.nvLinks[k].remoteBusId))
-            swJ[busKey(gj.nvLinks[k].remoteBusId)]++;
-
-    int n = 0;
-    for (auto& kv : swI)
-        if (swJ.count(kv.first)) n += kv.second;
-    return n;
-}
-
-#ifdef PHASE3_USE_NVML
-static int queryPcieTopo(const char* busIdA, const char* busIdB) {
-    nvmlDevice_t a, b;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busIdB, &b) != NVML_SUCCESS) return -1;
-    nvmlGpuTopologyLevel_t lvl;
-    if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
-    return (int)lvl;
-}
-#endif
-
-static std::string resolveCrossRankPcie(const GpuInfo& gi, const GpuInfo& gj) {
-#ifdef PHASE3_USE_NVML
-    return topoTag(queryPcieTopo(gi.busId, gj.busId));
-#else
-    int pt = -1;
-    for (int k = 0; k < gi.nPeerTopos && pt < 0; k++)
-        if (sameBus(gi.peerTopos[k].busId, gj.busId))
-            pt = gi.peerTopos[k].pcieTopo;
-    for (int k = 0; k < gj.nPeerTopos && pt < 0; k++)
-        if (sameBus(gj.peerTopos[k].busId, gi.busId))
-            pt = gj.peerTopos[k].pcieTopo;
-    return topoTag(pt);
-#endif
-}
-
-static void analyzeAndPrint(const std::vector<RankData>& all) {
-    const int ws = (int)all.size();
-
-#ifdef PHASE3_USE_NVML
-    CHK_NVML(nvmlInit_v2());
-#endif
+static void printTopology(const std::vector<RankManager>& managers) {
+    const int ws = (int)managers.size();
 
     /* ---- 1. Deduplicated global GPU list ---- */
     std::vector<GGpu> G;
     std::map<std::string, int> uid2g;
 
     for (int r = 0; r < ws; r++) {
-        const RankData& R = all[r];
+        const RankData& R = managers[r].data;
         for (int i = 0; i < R.nTopologyNodes; i++) {
             const GpuInfo& gi = R.nodes[i].gpu;
             std::string u(gi.uuid);
@@ -381,8 +493,7 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
                 g.memMB   = gi.memMB;
                 g.pcieGen = gi.pcieGen;
                 g.pcieWidth = gi.pcieWidth;
-                g.srcRank = r;
-                g.gpuIdx  = i;
+                g.handle  = R.nodes[i].handle;
                 uid2g[u]  = (int)G.size();
                 G.push_back(g);
             }
@@ -399,46 +510,25 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
 
     const int N = (int)G.size();
 
-    /* ---- 2. Build connection matrix ---- */
+    /* ---- 2. Build printable connection matrix from topology maps ---- */
     std::vector<std::vector<std::string>> conn(N, std::vector<std::string>(N));
 
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             if (i == j) { conn[i][j] = "X"; continue; }
-            if (G[i].host != G[j].host) { conn[i][j] = "NET"; continue; }
 
-            const GpuInfo& gi = all[G[i].srcRank].nodes[G[i].gpuIdx].gpu;
-            const GpuInfo& gj = all[G[j].srcRank].nodes[G[j].gpuIdx].gpu;
+            const Handle& hi = G[i].handle;
+            const Handle& hj = G[j].handle;
+            HandlePair key = std::make_pair(hi, hj);
 
-            if (G[i].srcRank == G[j].srcRank) {
-                const GpuPairLink& lk = all[G[i].srcRank].link[G[i].gpuIdx][G[j].gpuIdx];
-                if (lk.nvlinkCount > 0) {
-                    conn[i][j] = "NV" + std::to_string(lk.nvlinkCount);
-                } else {
-                    int nvs = countNvSwitchLinks(gi, gj, all, G[i].host);
-                    if (nvs > 0)
-                        conn[i][j] = "NV" + std::to_string(nvs);
-                    else
-                        conn[i][j] = topoTag(lk.pcieTopo);
-                }
+            auto it = managers[hi.rank].topology.find(key);
+            if (it != managers[hi.rank].topology.end()) {
+                conn[i][j] = it->second;
             } else {
-                int nvl = countNvLinksByBusId(gi, gj.busId);
-                if (nvl > 0) {
-                    conn[i][j] = "NV" + std::to_string(nvl);
-                } else {
-                    int nvs = countNvSwitchLinks(gi, gj, all, G[i].host);
-                    if (nvs > 0)
-                        conn[i][j] = "NV" + std::to_string(nvs);
-                    else
-                        conn[i][j] = resolveCrossRankPcie(gi, gj);
-                }
+                conn[i][j] = "?";
             }
         }
     }
-
-#ifdef PHASE3_USE_NVML
-    CHK_NVML(nvmlShutdown());
-#endif
 
     /* ---- 3. Print ---- */
     printf("\n");
@@ -447,14 +537,14 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
     printf("=========================================================================\n");
     printf("  %d rank(s),  %d unique GPU(s)\n", ws, N);
 #ifdef PHASE3_USE_NVML
-    printf("  (Phase 3 mode: NVML live query)\n");
+    printf("  (mode: NVML live query)\n");
 #else
-    printf("  (Phase 3 mode: pre-collected data only)\n");
+    printf("  (mode: pre-collected data only)\n");
 #endif
 
     printf("\n--- Per-Rank GPU Assignment ---\n\n");
     for (int r = 0; r < ws; r++) {
-        const RankData& R = all[r];
+        const RankData& R = managers[r].data;
         printf("  Rank %-3d @ %-20s  %d node(s)\n", r, R.hostname, R.nTopologyNodes);
         for (int i = 0; i < R.nTopologyNodes; i++) {
             const GpuInfo& gi = R.nodes[i].gpu;
@@ -524,6 +614,7 @@ int main(int argc, char** argv) {
     int ws;
     MPI_Comm_size(MPI_COMM_WORLD, &ws);
 
+    /* Phase 1 */
     if (gRank == 0)
         printf("[Phase 1] Collecting local GPU data (NVML + CUDA) ...\n");
 
@@ -531,16 +622,28 @@ int main(int argc, char** argv) {
     collectLocal(local);
     MPI_Barrier(MPI_COMM_WORLD);
 
+    /* Phase 2 */
     if (gRank == 0)
         printf("[Phase 2] Exchanging data across %d rank(s) (MPI_Allgather, "
                "%zu bytes/rank) ...\n", ws, sizeof(RankData));
 
-    std::vector<RankData> all;
-    exchange(local, all);
+    std::vector<RankData> allData;
+    exchange(local, allData);
 
+    /* Phase 3 – build topology per rank */
+    if (gRank == 0)
+        printf("[Phase 3] Building topology maps ...\n");
+
+    std::vector<RankManager> managers(ws);
+    for (int r = 0; r < ws; r++) {
+        managers[r].data = allData[r];
+        managers[r].buildTopology(allData);
+    }
+
+    /* Phase 4 – print */
     if (gRank == 0) {
-        printf("[Phase 3] Analyzing global topology ...\n");
-        analyzeAndPrint(all);
+        printf("[Phase 4] Printing global topology ...\n");
+        printTopology(managers);
     }
 
     MPI_Finalize();
