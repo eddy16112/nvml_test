@@ -81,6 +81,7 @@ struct PeerTopo {
 #endif
 
 struct GpuInfo {
+    int      deviceId;
     char     uuid[UUID_SZ];
     char     busId[BUSID_SZ];
     char     name[NAME_SZ];
@@ -172,6 +173,7 @@ static void collectLocal(RankData& D) {
         CHK_CUDA(cudaDeviceGetPCIBusId(cbid, BUSID_SZ, ci));
         cudaDeviceProp prop;
         CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
+        G.deviceId = ci;
         G.ccMajor = prop.major;
         G.ccMinor = prop.minor;
 
