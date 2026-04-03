@@ -1,12 +1,18 @@
 /*
  * MPI GPU Topology Collector
  *
- * Phase 1 – each rank collects its CUDA-visible GPUs and their pairwise topology
- * Phase 2 – MPI_Allgather exchanges RankData across all ranks
- * Phase 3 – rank 0 rebuilds the global topology using ONLY collected data
+ * Two modes controlled by PHASE3_USE_NVML:
+ *   - Not defined (default): Phase 3 uses only pre-collected data
+ *   - Defined:               Phase 3 may call NVML for cross-rank PCIe topology
  *
  * Build:
+ *   # default – Phase 3 offline (peerTopos cached in Phase 1)
  *   mpicxx -std=c++11 -o gpu_topo local_nvml.cpp \
+ *       -I/usr/local/cuda/include -L/usr/local/cuda/lib64 \
+ *       -lcudart -lnvidia-ml
+ *
+ *   # Phase 3 can call NVML – smaller struct, no peerTopos needed
+ *   mpicxx -std=c++11 -DPHASE3_USE_NVML -o gpu_topo local_nvml.cpp \
  *       -I/usr/local/cuda/include -L/usr/local/cuda/lib64 \
  *       -lcudart -lnvidia-ml
  *
@@ -56,6 +62,8 @@ static int gRank = 0;
     }                                                              \
 } while (0)
 
+
+#define PHASE3_USE_NVML
 /* ==================================================================
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
@@ -65,10 +73,12 @@ struct NvLinkPeer {
     int  active;
 };
 
+#ifndef PHASE3_USE_NVML
 struct PeerTopo {
     char busId[BUSID_SZ];
-    int  pcieTopo;     // nvmlGpuTopologyLevel_t value to this peer
+    int  pcieTopo;
 };
+#endif
 
 struct GpuInfo {
     char     uuid[UUID_SZ];
@@ -79,13 +89,15 @@ struct GpuInfo {
     int      pcieGen, pcieWidth;
     int      nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
+#ifndef PHASE3_USE_NVML
     int      nPeerTopos;
     PeerTopo peerTopos[MAX_GPUS];
+#endif
 };
 
 struct GpuPairLink {
-    int pcieTopo;     // nvmlGpuTopologyLevel_t value
-    int nvlinkCount;  // direct NVLink count
+    int pcieTopo;
+    int nvlinkCount;
 };
 
 struct RankData {
@@ -134,7 +146,6 @@ static void collectLocal(RankData& D) {
 
     CHK_NVML(nvmlInit_v2());
 
-    /* temporary: enumerate all node GPUs for CUDA→NVML Bus ID mapping */
     unsigned int nAllDev = 0;
     CHK_NVML(nvmlDeviceGetCount_v2(&nAllDev));
     int nAll = std::min((int)nAllDev, MAX_GPUS);
@@ -148,7 +159,6 @@ static void collectLocal(RankData& D) {
         strncpy(allBusIds[i], pci.busId, BUSID_SZ - 1);
     }
 
-    /* populate gpus[] with CUDA-visible devices only */
     int nCuda = 0;
     CHK_CUDA(cudaGetDeviceCount(&nCuda));
     D.nGpus = std::min(nCuda, MAX_GPUS);
@@ -202,7 +212,7 @@ static void collectLocal(RankData& D) {
             }
             G.nNvLinks = lcnt;
 
-            /* PCIe topology from this GPU to every other node GPU */
+#ifndef PHASE3_USE_NVML
             G.nPeerTopos = 0;
             for (int p = 0; p < nAll; p++) {
                 if (p == k) continue;
@@ -213,7 +223,7 @@ static void collectLocal(RankData& D) {
                 pt.pcieTopo = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
                 G.nPeerTopos++;
             }
-
+#endif
             break;
         }
     }
@@ -257,7 +267,7 @@ static void exchange(const RankData& local, std::vector<RankData>& all) {
 }
 
 /* ==================================================================
- *  Phase 3 – global topology analysis & print (NO CUDA / NVML)
+ *  Phase 3 – global topology analysis & print
  * ================================================================== */
 
 struct GGpu {
@@ -269,7 +279,6 @@ struct GGpu {
     std::vector<int> ownerRanks;
 };
 
-/* Count NVLinks from GPU gi to a peer identified by peerBusId */
 static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
     int n = 0;
     for (int k = 0; k < gi.nNvLinks; k++)
@@ -278,9 +287,6 @@ static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
     return n;
 }
 
-/* Detect NVSwitch: count links from gi to non-GPU NVSwitch devices
-   that gj also connects to. Need all rank's visible GPUs to know
-   which Bus IDs are "known GPUs" vs NVSwitches. */
 static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
                               const std::vector<RankData>& all,
                               const std::string& host) {
@@ -307,8 +313,38 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
     return n;
 }
 
+#ifdef PHASE3_USE_NVML
+static int queryPcieTopo(const char* busIdA, const char* busIdB) {
+    nvmlDevice_t a, b;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busIdB, &b) != NVML_SUCCESS) return -1;
+    nvmlGpuTopologyLevel_t lvl;
+    if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
+    return (int)lvl;
+}
+#endif
+
+static std::string resolveCrossRankPcie(const GpuInfo& gi, const GpuInfo& gj) {
+#ifdef PHASE3_USE_NVML
+    return topoTag(queryPcieTopo(gi.busId, gj.busId));
+#else
+    int pt = -1;
+    for (int k = 0; k < gi.nPeerTopos && pt < 0; k++)
+        if (sameBus(gi.peerTopos[k].busId, gj.busId))
+            pt = gi.peerTopos[k].pcieTopo;
+    for (int k = 0; k < gj.nPeerTopos && pt < 0; k++)
+        if (sameBus(gj.peerTopos[k].busId, gi.busId))
+            pt = gj.peerTopos[k].pcieTopo;
+    return topoTag(pt);
+#endif
+}
+
 static void analyzeAndPrint(const std::vector<RankData>& all) {
     const int ws = (int)all.size();
+
+#ifdef PHASE3_USE_NVML
+    CHK_NVML(nvmlInit_v2());
+#endif
 
     /* ---- 1. Deduplicated global GPU list ---- */
     std::vector<GGpu> G;
@@ -359,7 +395,6 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
             const GpuInfo& gj = all[G[j].srcRank].gpus[G[j].gpuIdx];
 
             if (G[i].srcRank == G[j].srcRank) {
-                /* same rank: use link[][] directly */
                 const GpuPairLink& lk = all[G[i].srcRank].link[G[i].gpuIdx][G[j].gpuIdx];
                 if (lk.nvlinkCount > 0) {
                     conn[i][j] = "NV" + std::to_string(lk.nvlinkCount);
@@ -371,29 +406,23 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
                         conn[i][j] = topoTag(lk.pcieTopo);
                 }
             } else {
-                /* cross-rank same-node: infer from collected per-GPU data */
                 int nvl = countNvLinksByBusId(gi, gj.busId);
                 if (nvl > 0) {
                     conn[i][j] = "NV" + std::to_string(nvl);
                 } else {
                     int nvs = countNvSwitchLinks(gi, gj, all, G[i].host);
-                    if (nvs > 0) {
+                    if (nvs > 0)
                         conn[i][j] = "NV" + std::to_string(nvs);
-                    } else {
-                        /* PCIe: look up from either GPU's peerTopos */
-                        int pt = -1;
-                        for (int k = 0; k < gi.nPeerTopos && pt < 0; k++)
-                            if (sameBus(gi.peerTopos[k].busId, gj.busId))
-                                pt = gi.peerTopos[k].pcieTopo;
-                        for (int k = 0; k < gj.nPeerTopos && pt < 0; k++)
-                            if (sameBus(gj.peerTopos[k].busId, gi.busId))
-                                pt = gj.peerTopos[k].pcieTopo;
-                        conn[i][j] = topoTag(pt);
-                    }
+                    else
+                        conn[i][j] = resolveCrossRankPcie(gi, gj);
                 }
             }
         }
     }
+
+#ifdef PHASE3_USE_NVML
+    CHK_NVML(nvmlShutdown());
+#endif
 
     /* ---- 3. Print ---- */
     printf("\n");
@@ -401,6 +430,11 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
     printf("                    GLOBAL GPU TOPOLOGY REPORT\n");
     printf("=========================================================================\n");
     printf("  %d rank(s),  %d unique GPU(s)\n", ws, N);
+#ifdef PHASE3_USE_NVML
+    printf("  (Phase 3 mode: NVML live query)\n");
+#else
+    printf("  (Phase 3 mode: pre-collected data only)\n");
+#endif
 
     printf("\n--- Per-Rank GPU Assignment ---\n\n");
     for (int r = 0; r < ws; r++) {
@@ -488,7 +522,7 @@ int main(int argc, char** argv) {
     exchange(local, all);
 
     if (gRank == 0) {
-        printf("[Phase 3] Analyzing global topology (no CUDA/NVML calls) ...\n");
+        printf("[Phase 3] Analyzing global topology ...\n");
         analyzeAndPrint(all);
     }
 
