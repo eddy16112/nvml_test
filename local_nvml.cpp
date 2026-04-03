@@ -97,11 +97,6 @@ struct GpuInfo {
 #endif
 };
 
-struct GpuPairLink {
-    int pcieTopo;
-    int nvlinkCount;
-};
-
 struct CpuInfo {
     int numaId;
 };
@@ -146,7 +141,6 @@ struct RankData {
     int            rank;
     int            nTopologyNodes;
     TopologyNode   nodes[MAX_GPUS];
-    GpuPairLink    link[MAX_GPUS][MAX_GPUS];
 };
 
 /* ==================================================================
@@ -243,7 +237,7 @@ static int queryPcieTopo(const char* busIdA, const char* busIdB) {
 }
 #endif
 
-static std::string resolveCrossRankPcie(const GpuInfo& gi, const GpuInfo& gj) {
+static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
 #ifdef PHASE3_USE_NVML
     return topoTag(queryPcieTopo(gi.busId, gj.busId));
 #else
@@ -259,35 +253,26 @@ static std::string resolveCrossRankPcie(const GpuInfo& gi, const GpuInfo& gj) {
 }
 
 static std::string resolveConnection(
-        const GpuInfo& gi, int srcIdx,
-        const GpuInfo& gj, int dstIdx,
-        const RankData& srcRank, const RankData& dstRank,
-        bool sameRank, bool sameNode,
-        const std::vector<RankData>& allRanks) {
+        const GpuInfo& gi, const GpuInfo& gj,
+        bool sameNode,
+        const std::vector<RankData>& allRanks,
+        const std::string& hostname) {
 
-    if (srcIdx == dstIdx && sameRank)
+    if (sameBus(gi.busId, gj.busId))
         return "X";
 
     if (!sameNode)
         return "NET";
 
-    if (sameRank) {
-        const GpuPairLink& lk = srcRank.link[srcIdx][dstIdx];
-        if (lk.nvlinkCount > 0)
-            return "NV" + std::to_string(lk.nvlinkCount);
-        int nvs = countNvSwitchLinks(gi, gj, allRanks, std::string(srcRank.hostname));
-        if (nvs > 0)
-            return "NV" + std::to_string(nvs);
-        return topoTag(lk.pcieTopo);
-    }
-
     int nvl = countNvLinksByBusId(gi, gj.busId);
     if (nvl > 0)
         return "NV" + std::to_string(nvl);
-    int nvs = countNvSwitchLinks(gi, gj, allRanks, std::string(srcRank.hostname));
+
+    int nvs = countNvSwitchLinks(gi, gj, allRanks, hostname);
     if (nvs > 0)
         return "NV" + std::to_string(nvs);
-    return resolveCrossRankPcie(gi, gj);
+
+    return resolvePcie(gi, gj);
 }
 
 /* ==================================================================
@@ -318,13 +303,11 @@ static void collectLocal(RankData& D) {
     CHK_CUDA(cudaGetDeviceCount(&nCuda));
     D.nTopologyNodes = std::min(nCuda, MAX_GPUS);
 
-    int nvmlIdx[MAX_GPUS];
     for (int ci = 0; ci < D.nTopologyNodes; ci++) {
         D.nodes[ci].handle.rank = D.rank;
         D.nodes[ci].handle.type = GPU_HANDLE;
         D.nodes[ci].handle.gpu.deviceId = ci;
         GpuInfo& G = D.nodes[ci].gpu;
-        nvmlIdx[ci] = -1;
 
         char cbid[BUSID_SZ] = {};
         CHK_CUDA(cudaDeviceGetPCIBusId(cbid, BUSID_SZ, ci));
@@ -336,7 +319,6 @@ static void collectLocal(RankData& D) {
 
         for (int k = 0; k < nAll; k++) {
             if (!sameBus(cbid, allBusIds[k])) continue;
-            nvmlIdx[ci] = k;
             nvmlDevice_t hDev = hAll[k];
 
             CHK_NVML(nvmlDeviceGetUUID(hDev, G.uuid, UUID_SZ));
@@ -387,27 +369,6 @@ static void collectLocal(RankData& D) {
         }
     }
 
-    for (int i = 0; i < D.nTopologyNodes; i++) {
-        D.link[i][i] = {0, 0};
-        for (int j = i + 1; j < D.nTopologyNodes; j++) {
-            if (nvmlIdx[i] < 0 || nvmlIdx[j] < 0) {
-                D.link[i][j] = D.link[j][i] = {-1, 0};
-                continue;
-            }
-            nvmlGpuTopologyLevel_t lvl;
-            nvmlReturn_t r = nvmlDeviceGetTopologyCommonAncestor(
-                                 hAll[nvmlIdx[i]], hAll[nvmlIdx[j]], &lvl);
-            int topo = (r == NVML_SUCCESS) ? (int)lvl : -1;
-
-            int nvl = 0;
-            for (int k = 0; k < D.nodes[i].gpu.nNvLinks; k++)
-                if (sameBus(D.nodes[i].gpu.nvLinks[k].remoteBusId, D.nodes[j].gpu.busId))
-                    nvl++;
-
-            D.link[i][j] = D.link[j][i] = {topo, nvl};
-        }
-    }
-
     CHK_NVML(nvmlShutdown());
 }
 
@@ -452,7 +413,6 @@ void RankManager::buildTopology(const std::vector<RankData>& allRanks) {
 
         for (size_t r = 0; r < allRanks.size(); r++) {
             const RankData& dstRank = allRanks[r];
-            bool sameRank = ((int)r == data.rank);
             bool sameNode = (std::string(dstRank.hostname) == myHost);
 
             for (int di = 0; di < dstRank.nTopologyNodes; di++) {
@@ -467,10 +427,7 @@ void RankManager::buildTopology(const std::vector<RankData>& allRanks) {
 
                 const GpuInfo& gj = dstRank.nodes[di].gpu;
                 std::string conn = resolveConnection(
-                    gi, si, gj, di,
-                    data, dstRank,
-                    sameRank, sameNode,
-                    allRanks);
+                    gi, gj, sameNode, allRanks, myHost);
 
                 topology[cp] = conn;
             }
