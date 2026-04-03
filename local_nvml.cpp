@@ -62,6 +62,11 @@ static int gRank = 0;
  *  Fixed-size POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
 
+struct NvLinkPeer {
+    char remoteBusId[BUSID_SZ];
+    int  active;
+};
+
 struct GpuInfo {
     char     uuid[UUID_SZ];
     char     busId[BUSID_SZ];
@@ -69,11 +74,9 @@ struct GpuInfo {
     int      ccMajor, ccMinor;
     uint64_t memMB;
     int      pcieGen, pcieWidth;
-};
 
-struct LinkPeer {
-    char remoteBusId[BUSID_SZ];
-    int  active;
+    int        nNvLinks;
+    NvLinkPeer nvLinks[MAX_LINKS];
 };
 
 struct RankData {
@@ -88,9 +91,6 @@ struct RankData {
 
     int      topo[MAX_GPUS][MAX_GPUS];
     int      directNvl[MAX_GPUS][MAX_GPUS];
-
-    LinkPeer peers[MAX_GPUS][MAX_LINKS];
-    int      nPeers[MAX_GPUS];
 };
 
 /* ==================================================================
@@ -194,7 +194,7 @@ static void collectLocal(RankData& D) {
         }
     }
 
-    /* ---- NVLink peer info ---- */
+    /* ---- NVLink peer info (stored per-GPU) ---- */
     for (int i = 0; i < D.nNodeGpus; i++) {
         int cnt = 0;
         for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
@@ -207,19 +207,19 @@ static void collectLocal(RankData& D) {
             r = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev[i], l, &rp);
             if (r != NVML_SUCCESS) continue;
             if (cnt < MAX_LINKS) {
-                strncpy(D.peers[i][cnt].remoteBusId, rp.busId, BUSID_SZ - 1);
-                D.peers[i][cnt].active = 1;
+                strncpy(D.gpus[i].nvLinks[cnt].remoteBusId, rp.busId, BUSID_SZ - 1);
+                D.gpus[i].nvLinks[cnt].active = 1;
                 cnt++;
             }
         }
-        D.nPeers[i] = cnt;
+        D.gpus[i].nNvLinks = cnt;
 
         /* direct NVLink count between GPU i and every other node GPU */
         for (int j = 0; j < D.nNodeGpus; j++) {
             if (i == j) continue;
             int n = 0;
             for (int k = 0; k < cnt; k++)
-                if (sameBus(D.peers[i][k].remoteBusId, D.gpus[j].busId))
+                if (sameBus(D.gpus[i].nvLinks[k].remoteBusId, D.gpus[j].busId))
                     n++;
             D.directNvl[i][j] = n;
         }
@@ -346,12 +346,12 @@ static void analyzeAndPrint(const std::vector<RankData>& all) {
             /* NVSwitch detection: count links from GPU i to NVSwitch
                devices that GPU j also connects to */
             std::map<std::string, int> swI, swJ;
-            for (int k = 0; k < pR->nPeers[li]; k++)
-                if (pR->peers[li][k].active && !isNodeGpu(*pR, pR->peers[li][k].remoteBusId))
-                    swI[busKey(pR->peers[li][k].remoteBusId)]++;
-            for (int k = 0; k < pR->nPeers[lj]; k++)
-                if (pR->peers[lj][k].active && !isNodeGpu(*pR, pR->peers[lj][k].remoteBusId))
-                    swJ[busKey(pR->peers[lj][k].remoteBusId)]++;
+            for (int k = 0; k < pR->gpus[li].nNvLinks; k++)
+                if (pR->gpus[li].nvLinks[k].active && !isNodeGpu(*pR, pR->gpus[li].nvLinks[k].remoteBusId))
+                    swI[busKey(pR->gpus[li].nvLinks[k].remoteBusId)]++;
+            for (int k = 0; k < pR->gpus[lj].nNvLinks; k++)
+                if (pR->gpus[lj].nvLinks[k].active && !isNodeGpu(*pR, pR->gpus[lj].nvLinks[k].remoteBusId))
+                    swJ[busKey(pR->gpus[lj].nvLinks[k].remoteBusId)]++;
 
             int nvsCount = 0;
             for (auto& kv : swI)
