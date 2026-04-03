@@ -1,0 +1,13 @@
+#!/bin/bash
+
+GPUS_PER_RANK=4
+RANK=${OMPI_COMM_WORLD_RANK:-${PMI_RANK:-${SLURM_PROCID:-0}}}
+
+START=$((RANK * GPUS_PER_RANK))
+END=$((START + GPUS_PER_RANK - 1))
+
+export CUDA_VISIBLE_DEVICES=$(seq -s, $START $END)
+
+echo "[Rank $RANK] CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+
+exec "$(dirname "$0")/build/gpu_topo"
