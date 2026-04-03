@@ -63,7 +63,7 @@ static int gRank = 0;
     }                                                              \
 } while (0)
 
-#define PHASE3_USE_NVML
+//#define PHASE3_USE_NVML
 
 /* ==================================================================
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
@@ -147,6 +147,28 @@ struct RankData {
     int            nTopologyNodes;
     TopologyNode   nodes[MAX_GPUS];
     GpuPairLink    link[MAX_GPUS][MAX_GPUS];
+};
+
+/* ==================================================================
+ *  RankManager – owns RankData + per-rank topology map
+ * ================================================================== */
+
+typedef std::pair<Handle, Handle> HandlePair;
+
+static HandlePair canonicalPair(const Handle& a, const Handle& b) {
+    return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+}
+
+struct RankManager {
+    RankData data;
+    std::map<HandlePair, std::string> topology;
+
+    void buildTopology(const std::vector<RankData>& allRanks);
+
+    std::string query(const Handle& a, const Handle& b) const {
+        auto it = topology.find(canonicalPair(a, b));
+        return (it != topology.end()) ? it->second : "";
+    }
 };
 
 /* ==================================================================
@@ -402,29 +424,13 @@ static void exchange(const RankData& local, std::vector<RankData>& all) {
                   MPI_COMM_WORLD);
 }
 
-/* ==================================================================
- *  RankManager – owns RankData + per-rank topology map
- * ================================================================== */
-
-typedef std::pair<Handle, Handle> HandlePair;
-
-struct RankManager {
-    RankData data;
-    std::map<HandlePair, std::string> topology;
-
-    void buildTopology(const std::vector<RankData>& allRanks);
-
-    std::string query(const Handle& src, const Handle& dst) const {
-        auto it = topology.find(std::make_pair(src, dst));
-        return (it != topology.end()) ? it->second : "";
-    }
-};
-
 static std::string queryConnection(const std::vector<RankManager>& managers,
-                                   const Handle& src, const Handle& dst) {
-    if (src.rank < 0 || src.rank >= (int)managers.size())
+                                   const Handle& a, const Handle& b) {
+    HandlePair cp = canonicalPair(a, b);
+    int owner = cp.first.rank;
+    if (owner < 0 || owner >= (int)managers.size())
         return "";
-    return managers[src.rank].query(src, dst);
+    return managers[owner].query(a, b);
 }
 
 /* ==================================================================
@@ -451,15 +457,22 @@ void RankManager::buildTopology(const std::vector<RankData>& allRanks) {
 
             for (int di = 0; di < dstRank.nTopologyNodes; di++) {
                 const Handle& dst = dstRank.nodes[di].handle;
-                const GpuInfo& gj = dstRank.nodes[di].gpu;
 
+                HandlePair cp = canonicalPair(src, dst);
+                if (cp.first.rank != data.rank)
+                    continue;
+
+                if (topology.count(cp))
+                    continue;
+
+                const GpuInfo& gj = dstRank.nodes[di].gpu;
                 std::string conn = resolveConnection(
                     gi, si, gj, di,
                     data, dstRank,
                     sameRank, sameNode,
                     allRanks);
 
-                topology[std::make_pair(src, dst)] = conn;
+                topology[cp] = conn;
             }
         }
     }
@@ -531,10 +544,11 @@ static void printTopology(const std::vector<RankManager>& managers) {
 
             const Handle& hi = G[i].handle;
             const Handle& hj = G[j].handle;
-            HandlePair key = std::make_pair(hi, hj);
+            HandlePair cp = canonicalPair(hi, hj);
+            int owner = cp.first.rank;
 
-            auto it = managers[hi.rank].topology.find(key);
-            if (it != managers[hi.rank].topology.end()) {
+            auto it = managers[owner].topology.find(cp);
+            if (it != managers[owner].topology.end()) {
                 conn[i][j] = it->second;
             } else {
                 conn[i][j] = "?";
