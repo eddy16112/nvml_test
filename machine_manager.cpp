@@ -37,15 +37,13 @@ static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
 }
 
 static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
-                              const RankData& srcRank,
-                              const RankData& dstRank) {
+                              const MachineManager& srcMgr,
+                              const MachineManager& dstMgr) {
     auto isKnownGpu = [&](const char* bid) -> bool {
-        for (int g = 0; g < srcRank.nGpus; g++)
-            if (sameBus(bid, srcRank.gpus[g].gpu.busId))
-                return true;
-        for (int g = 0; g < dstRank.nGpus; g++)
-            if (sameBus(bid, dstRank.gpus[g].gpu.busId))
-                return true;
+        for (auto& n : srcMgr.gpus())
+            if (sameBus(bid, n.gpu.busId)) return true;
+        for (auto& n : dstMgr.gpus())
+            if (sameBus(bid, n.gpu.busId)) return true;
         return false;
     };
 
@@ -92,7 +90,7 @@ static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
 static std::string resolveGpuGpu(
         const GpuInfo& gi, const GpuInfo& gj,
         bool sameNode,
-        const RankData& srcRank, const RankData& dstRank) {
+        const MachineManager& srcMgr, const MachineManager& dstMgr) {
 
     if (sameNode && sameBus(gi.busId, gj.busId))
         return "X";
@@ -101,7 +99,7 @@ static std::string resolveGpuGpu(
     if (nvl > 0)
         return "NV" + std::to_string(nvl);
 
-    int nvs = countNvSwitchLinks(gi, gj, srcRank, dstRank);
+    int nvs = countNvSwitchLinks(gi, gj, srcMgr, dstMgr);
     if (nvs > 0)
         return "NV" + std::to_string(nvs);
 
@@ -132,13 +130,13 @@ static std::string resolveCpuCpu(const CpuInfo& ci, const CpuInfo& cj,
 static std::string resolveNodeConnection(
         const TopologyNode& src, const TopologyNode& dst,
         bool sameNode,
-        const RankData& srcRank, const RankData& dstRank) {
+        const MachineManager& srcMgr, const MachineManager& dstMgr) {
 
     CUIDTXprocessorType st = src.handle.type;
     CUIDTXprocessorType dt = dst.handle.type;
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuGpu(src.gpu, dst.gpu, sameNode, srcRank, dstRank);
+        return resolveGpuGpu(src.gpu, dst.gpu, sameNode, srcMgr, dstMgr);
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
         return resolveGpuCpu(src.gpu, dst.cpu, sameNode);
@@ -153,36 +151,34 @@ static std::string resolveNodeConnection(
  *  collectAllNodes
  * ================================================================== */
 
-void collectAllNodes(const RankData& R,
+void collectAllNodes(const MachineManager& M,
                      std::vector<const TopologyNode*>& out) {
-    for (int i = 0; i < R.nGpus; i++) out.push_back(&R.gpus[i]);
-    for (int i = 0; i < MAX_NUMAS; i++)
-        if (R.cpus[i].handle.type == CUIDTX_PROCESSOR_TYPE_CPU)
-            out.push_back(&R.cpus[i]);
+    for (auto& n : M.gpus()) out.push_back(&n);
+    for (auto& n : M.cpus()) out.push_back(&n);
 }
 
 /* ==================================================================
  *  MachineManager::buildTopology
  * ================================================================== */
 
-void MachineManager::buildTopology(const RankData& remote) {
-    bool sameNode = (std::string(remote.hostname) == std::string(data.hostname));
+void MachineManager::buildTopology(const MachineManager& remote) {
+    bool sameNode = (std::string(remote.hostname) == std::string(hostname));
 
     std::vector<const TopologyNode*> srcNodes, dstNodes;
-    collectAllNodes(data, srcNodes);
+    collectAllNodes(*this, srcNodes);
     collectAllNodes(remote, dstNodes);
 
     for (auto* srcNode : srcNodes) {
         for (auto* dstNode : dstNodes) {
             CUIDTXprocessorPair cp = canonicalPair(srcNode->handle, dstNode->handle);
-            if (cp.first.rank != data.rank)
+            if (cp.first.rank != rank)
                 continue;
             if (topology.count(cp))
                 continue;
 
             std::string conn = resolveNodeConnection(
                 *srcNode, *dstNode,
-                sameNode, data, remote);
+                sameNode, *this, remote);
 
             topology[cp] = conn;
         }
@@ -234,13 +230,13 @@ void printTopology(const std::vector<MachineManager>& managers) {
     std::map<std::string, int> key2g;
 
     for (int r = 0; r < ws; r++) {
-        const RankData& R = managers[r].data;
+        const MachineManager& M = managers[r];
         std::vector<const TopologyNode*> rnodes;
-        collectAllNodes(R, rnodes);
+        collectAllNodes(M, rnodes);
         for (auto* np : rnodes) {
             GNode gn;
             gn.handle = np->handle;
-            gn.host   = R.hostname;
+            gn.host   = M.hostname;
 
             if (gn.isGpu()) {
                 const GpuInfo& gi = np->gpu;
@@ -318,12 +314,13 @@ void printTopology(const std::vector<MachineManager>& managers) {
     /* ---- Per-Rank Assignment ---- */
     printf("\n--- Per-Rank Assignment ---\n\n");
     for (int r = 0; r < ws; r++) {
-        const RankData& R = managers[r].data;
+        const MachineManager& M = managers[r];
         printf("  Rank %-3d @ %-20s  %d GPU, %d CPU NUMA\n",
-               r, R.hostname, R.nGpus, R.nCpus);
-        for (int i = 0; i < R.nGpus; i++) {
-            std::string hl = handleStr(R.gpus[i].handle);
-            const GpuInfo& gi = R.gpus[i].gpu;
+               r, M.hostname,
+               (int)M.gpus().size(), (int)M.cpus().size());
+        for (auto& n : M.gpus()) {
+            std::string hl = handleStr(n.handle);
+            const GpuInfo& gi = n.gpu;
             printf("    %-12s  %s [%s] %lu MB PCIe-Gen%d x%d",
                    hl.c_str(), gi.busId, gi.name,
                    (unsigned long)gi.memMB,
@@ -334,10 +331,9 @@ void printTopology(const std::vector<MachineManager>& managers) {
                 printf(" NUMA:%d", gi.numaId);
             printf("\n");
         }
-        for (int i = 0; i < MAX_NUMAS; i++) {
-            if (R.cpus[i].handle.type != CUIDTX_PROCESSOR_TYPE_CPU) continue;
-            std::string hl = handleStr(R.cpus[i].handle);
-            const CpuInfo& ci = R.cpus[i].cpu;
+        for (auto& n : M.cpus()) {
+            std::string hl = handleStr(n.handle);
+            const CpuInfo& ci = n.cpu;
             printf("    %-12s  %d core(s)\n", hl.c_str(), ci.nCores);
         }
     }

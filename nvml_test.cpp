@@ -38,13 +38,55 @@ static int gRank = 0;
 } while (0)
 #endif
 
-static void exchange(const RankData& local, std::vector<RankData>& all) {
+/* POD wire format for MPI_Allgather */
+struct RankDataWire {
+    char         hostname[HOST_SZ];
+    int          rank;
+    int          nNodes;
+    TopologyNode nodes[MAX_TOPO_NODES];
+};
+
+static void packToWire(const MachineManager& M, RankDataWire& w) {
+    memset(&w, 0, sizeof(w));
+    strncpy(w.hostname, M.hostname, HOST_SZ - 1);
+    w.rank = M.rank;
+    w.nNodes = 0;
+    for (auto& n : M.gpus()) {
+        if (w.nNodes >= MAX_TOPO_NODES) break;
+        w.nodes[w.nNodes++] = n;
+    }
+    for (auto& n : M.cpus()) {
+        if (w.nNodes >= MAX_TOPO_NODES) break;
+        w.nodes[w.nNodes++] = n;
+    }
+}
+
+static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
+    strncpy(M.hostname, w.hostname, HOST_SZ - 1);
+    M.hostname[HOST_SZ - 1] = '\0';
+    M.rank = w.rank;
+    M.processors_.clear();
+    for (int i = 0; i < w.nNodes; i++) {
+        M.processors_[w.nodes[i].handle.type].push_back(w.nodes[i]);
+    }
+}
+
+static void exchange(const MachineManager& local,
+                     std::vector<MachineManager>& all) {
     int ws;
     MPI_Comm_size(MPI_COMM_WORLD, &ws);
-    all.resize(ws);
-    MPI_Allgather(&local, sizeof(RankData), MPI_BYTE,
-                  all.data(), sizeof(RankData), MPI_BYTE,
+
+    RankDataWire localWire;
+    packToWire(local, localWire);
+
+    std::vector<RankDataWire> allWire(ws);
+    MPI_Allgather(&localWire, sizeof(RankDataWire), MPI_BYTE,
+                  allWire.data(), sizeof(RankDataWire), MPI_BYTE,
                   MPI_COMM_WORLD);
+
+    all.resize(ws);
+    for (int r = 0; r < ws; r++)
+        unpackFromWire(allWire[r], all[r]);
 }
 
 int main(int argc, char** argv) {
@@ -54,9 +96,9 @@ int main(int argc, char** argv) {
     int ws;
     MPI_Comm_size(MPI_COMM_WORLD, &ws);
 
-    RankData local;
-    memset(&local, 0, sizeof(local));
-    MPI_Comm_rank(MPI_COMM_WORLD, &local.rank);
+    MachineManager local;
+    memset(local.hostname, 0, HOST_SZ);
+    local.rank = gRank;
     gethostname(local.hostname, HOST_SZ);
 
     /* Phase 1A – GPU */
@@ -65,9 +107,8 @@ int main(int argc, char** argv) {
     {
         CudaPAL gpuPal;
         for (auto& node : gpuPal.enumerateProcessors()) {
-            if (local.nGpus >= MAX_GPUS) break;
             node.handle.rank = local.rank;
-            local.gpus[local.nGpus++] = node;
+            local.processors_[CUIDTX_PROCESSOR_TYPE_GPU].push_back(node);
         }
     }
 
@@ -77,11 +118,8 @@ int main(int argc, char** argv) {
     {
         CPUPAL cpuPal;
         for (auto& node : cpuPal.enumerateProcessors()) {
-            int numaId = node.handle.cpu.numaId;
-            if (numaId < 0 || numaId >= MAX_NUMAS) continue;
             node.handle.rank = local.rank;
-            local.cpus[numaId] = node;
-            local.nCpus++;
+            local.processors_[CUIDTX_PROCESSOR_TYPE_CPU].push_back(node);
         }
     }
     MPI_Barrier(MPI_COMM_WORLD);
@@ -89,10 +127,10 @@ int main(int argc, char** argv) {
     /* Phase 2 */
     if (gRank == 0)
         printf("[Phase 2] Exchanging data across %d rank(s) (MPI_Allgather, "
-               "%zu bytes/rank) ...\n", ws, sizeof(RankData));
+               "%zu bytes/rank) ...\n", ws, sizeof(RankDataWire));
 
-    std::vector<RankData> allData;
-    exchange(local, allData);
+    std::vector<MachineManager> managers;
+    exchange(local, managers);
 
     /* Phase 3 – build topology per rank */
     if (gRank == 0)
@@ -101,12 +139,9 @@ int main(int argc, char** argv) {
 #ifdef PHASE3_USE_NVML
     CHK_NVML(nvmlInit_v2());
 #endif
-    std::vector<MachineManager> managers(ws);
-    for (int r = 0; r < ws; r++)
-        managers[r].data = allData[r];
     for (int r = 0; r < ws; r++)
         for (int d = 0; d < ws; d++)
-            managers[r].buildTopology(allData[d]);
+            managers[r].buildTopology(managers[d]);
 #ifdef PHASE3_USE_NVML
     CHK_NVML(nvmlShutdown());
 #endif
@@ -147,7 +182,7 @@ int main(int argc, char** argv) {
                    conn.empty() ? "(not found)" : conn.c_str());
         };
 
-        if (managers[0].data.nGpus >= 2) {
+        if (managers[0].gpus().size() >= 2) {
             printTest("GPU local->local",
                       mkGpu(0, 0), mkGpu(0, 1));
         }
@@ -157,18 +192,15 @@ int main(int argc, char** argv) {
                       mkGpu(0, 0), mkGpu(1, 0));
         }
 
-        if (ws >= 2 && managers[1].data.nGpus >= 2) {
+        if (ws >= 2 && managers[1].gpus().size() >= 2) {
             printTest("GPU remote->remote",
                       mkGpu(1, 0), mkGpu(1, 1));
         }
 
-        for (int i = 0; i < MAX_NUMAS; i++) {
-            if (managers[0].data.cpus[i].handle.type == CUIDTX_PROCESSOR_TYPE_CPU) {
-                printTest("GPU->CPU",
-                          mkGpu(0, 0),
-                          mkCpu(0, managers[0].data.cpus[i].cpu.numaId));
-                break;
-            }
+        if (!managers[0].cpus().empty()) {
+            int firstNuma = managers[0].cpus()[0].cpu.numaId;
+            printTest("GPU->CPU",
+                      mkGpu(0, 0), mkCpu(0, firstNuma));
         }
 
         printf("\n");
