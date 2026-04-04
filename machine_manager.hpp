@@ -42,9 +42,6 @@ struct MachineManager {
     }
 };
 
-void collectAllNodes(const MachineManager& M,
-                     std::vector<const Processor*>& out);
-
 std::string queryConnection(const std::vector<MachineManager>& managers,
                             const CUIDTXprocessor& a,
                             const CUIDTXprocessor& b);

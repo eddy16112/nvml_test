@@ -161,39 +161,26 @@ static std::string resolveNodeConnection(
 }
 
 /* ==================================================================
- *  collectAllNodes
- * ================================================================== */
-
-void collectAllNodes(const MachineManager& M,
-                     std::vector<const Processor*>& out) {
-    for (auto& p : M.gpus()) out.push_back(p.get());
-    for (auto& p : M.cpus()) out.push_back(p.get());
-}
-
-/* ==================================================================
  *  MachineManager::buildTopology
  * ================================================================== */
 
 void MachineManager::buildTopology(const MachineManager& remote) {
     bool sameNode = (std::string(remote.hostname) == std::string(hostname));
 
-    std::vector<const Processor*> srcNodes, dstNodes;
-    collectAllNodes(*this, srcNodes);
-    collectAllNodes(remote, dstNodes);
+    for (auto& [stype, svec] : processors_) {
+        for (auto& sp : svec) {
+            for (auto& [dtype, dvec] : remote.processors_) {
+                for (auto& dp : dvec) {
+                    TopologyNode::Pair cp = canonicalPair(sp->topologyNode_, dp->topologyNode_);
+                    if (cp.first.rank != rank)
+                        continue;
+                    if (topology.count(cp))
+                        continue;
 
-    for (auto* srcNode : srcNodes) {
-        for (auto* dstNode : dstNodes) {
-            TopologyNode::Pair cp = canonicalPair(srcNode->topologyNode_, dstNode->topologyNode_);
-            if (cp.first.rank != rank)
-                continue;
-            if (topology.count(cp))
-                continue;
-
-            std::string conn = resolveNodeConnection(
-                *srcNode, *dstNode,
-                sameNode, *this, remote);
-
-            topology[cp] = conn;
+                    topology[cp] = resolveNodeConnection(
+                        *sp, *dp, sameNode, *this, remote);
+                }
+            }
         }
     }
 }
@@ -257,35 +244,35 @@ void printTopology(const std::vector<MachineManager>& managers) {
 
     for (int r = 0; r < ws; r++) {
         const MachineManager& M = managers[r];
-        std::vector<const Processor*> rnodes;
-        collectAllNodes(M, rnodes);
-        for (auto* np : rnodes) {
-            GNode gn;
-            gn.tnode  = np->topologyNode_;
-            gn.host   = M.hostname;
+        for (auto& [type, pvec] : M.processors_) {
+            for (auto& np : pvec) {
+                GNode gn;
+                gn.tnode  = np->topologyNode_;
+                gn.host   = M.hostname;
 
-            if (gn.isGpu()) {
-                const GpuInfo& gi = np->info_.gpu;
-                gn.uuid    = gi.uuid;
-                gn.busId   = gi.busId;
-                gn.name    = gi.name;
-                gn.ccMajor = gi.ccMajor;
-                gn.ccMinor = gi.ccMinor;
-                gn.memMB   = gi.memMB;
-                gn.pcieGen = gi.pcieGen;
-                gn.pcieWidth = gi.pcieWidth;
-                gn.numaId  = gi.numaId;
-            } else {
-                const CpuInfo& ci = np->info_.cpu;
-                gn.numaId = ci.numaId;
-            }
+                if (gn.isGpu()) {
+                    const GpuInfo& gi = np->info_.gpu;
+                    gn.uuid    = gi.uuid;
+                    gn.busId   = gi.busId;
+                    gn.name    = gi.name;
+                    gn.ccMajor = gi.ccMajor;
+                    gn.ccMinor = gi.ccMinor;
+                    gn.memMB   = gi.memMB;
+                    gn.pcieGen = gi.pcieGen;
+                    gn.pcieWidth = gi.pcieWidth;
+                    gn.numaId  = gi.numaId;
+                } else {
+                    const CpuInfo& ci = np->info_.cpu;
+                    gn.numaId = ci.numaId;
+                }
 
-            std::string k = gn.nodeKey();
-            if (key2g.count(k) == 0) {
-                key2g[k] = (int)G.size();
-                G.push_back(gn);
+                std::string k = gn.nodeKey();
+                if (key2g.count(k) == 0) {
+                    key2g[k] = (int)G.size();
+                    G.push_back(gn);
+                }
+                G[key2g[k]].ownerRanks.push_back(r);
             }
-            G[key2g[k]].ownerRanks.push_back(r);
         }
     }
 

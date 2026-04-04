@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#define PHASE3_USE_NVML
+//#define PHASE3_USE_NVML
 
 static constexpr int MAX_GPUS       = 16;
 static constexpr int MAX_NUMAS      = 16;
