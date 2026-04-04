@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <memory>
 #include <unistd.h>
 
 #include <mpi.h>
@@ -40,10 +41,10 @@ static int gRank = 0;
 
 /* POD wire format for MPI_Allgather */
 struct RankDataWire {
-    char         hostname[HOST_SZ];
-    int          rank;
-    int          nNodes;
-    TopologyNode nodes[MAX_TOPO_NODES];
+    char          hostname[HOST_SZ];
+    int           rank;
+    int           nNodes;
+    ProcessorInfo nodes[MAX_TOPO_NODES];
 };
 
 static void packToWire(const MachineManager& M, RankDataWire& w) {
@@ -51,13 +52,13 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
     strncpy(w.hostname, M.hostname, HOST_SZ - 1);
     w.rank = M.rank;
     w.nNodes = 0;
-    for (auto& n : M.gpus()) {
+    for (auto& p : M.gpus()) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
-        w.nodes[w.nNodes++] = n;
+        w.nodes[w.nNodes++] = p->info_;
     }
-    for (auto& n : M.cpus()) {
+    for (auto& p : M.cpus()) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
-        w.nodes[w.nNodes++] = n;
+        w.nodes[w.nNodes++] = p->info_;
     }
 }
 
@@ -67,12 +68,13 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
     M.rank = w.rank;
     M.processors_.clear();
     for (int i = 0; i < w.nNodes; i++) {
-        M.processors_[w.nodes[i].handle.type].push_back(w.nodes[i]);
+        M.processors_[w.nodes[i].type].emplace_back(
+            std::make_unique<Processor>(w.nodes[i], w.rank));
     }
 }
 
-static void exchange(const MachineManager& local,
-                     std::vector<MachineManager>& all) {
+static void exchangeRankData(const MachineManager& local,
+                             std::vector<MachineManager>& all) {
     int ws;
     MPI_Comm_size(MPI_COMM_WORLD, &ws);
 
@@ -106,10 +108,7 @@ int main(int argc, char** argv) {
         printf("[Phase 1A] Collecting local GPU data (CudaPAL) ...\n");
     {
         CudaPAL gpuPal;
-        for (auto& node : gpuPal.enumerateProcessors()) {
-            node.handle.rank = local.rank;
-            local.processors_[CUIDTX_PROCESSOR_TYPE_GPU].push_back(node);
-        }
+        local.loadPAL(gpuPal);
     }
 
     /* Phase 1B – CPU */
@@ -117,10 +116,7 @@ int main(int argc, char** argv) {
         printf("[Phase 1B] Collecting local CPU data (CPUPAL) ...\n");
     {
         CPUPAL cpuPal;
-        for (auto& node : cpuPal.enumerateProcessors()) {
-            node.handle.rank = local.rank;
-            local.processors_[CUIDTX_PROCESSOR_TYPE_CPU].push_back(node);
-        }
+        local.loadPAL(cpuPal);
     }
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -130,7 +126,7 @@ int main(int argc, char** argv) {
                "%zu bytes/rank) ...\n", ws, sizeof(RankDataWire));
 
     std::vector<MachineManager> managers;
-    exchange(local, managers);
+    exchangeRankData(local, managers);
 
     /* Phase 3 – build topology per rank */
     if (gRank == 0)
@@ -158,17 +154,19 @@ int main(int argc, char** argv) {
 
         auto mkGpu = [](int rank, int devId) -> CUIDTXprocessor {
             CUIDTXprocessor h;
+            memset(&h, 0, sizeof(h));
             h.rank = rank;
             h.type = CUIDTX_PROCESSOR_TYPE_GPU;
             h.gpu.deviceId = devId;
             return h;
         };
 
-        auto mkCpu = [](int rank, int numaId) -> CUIDTXprocessor {
+        auto mkCpu = [](int rank, int cpuOrdinal) -> CUIDTXprocessor {
             CUIDTXprocessor h;
+            memset(&h, 0, sizeof(h));
             h.rank = rank;
             h.type = CUIDTX_PROCESSOR_TYPE_CPU;
-            h.cpu.numaId = numaId;
+            h.cpu.cpuOrdinal = cpuOrdinal;
             return h;
         };
 
@@ -198,9 +196,9 @@ int main(int argc, char** argv) {
         }
 
         if (!managers[0].cpus().empty()) {
-            int firstNuma = managers[0].cpus()[0].cpu.numaId;
+            int firstOrdinal = managers[0].cpus()[0]->handle_.cpu.cpuOrdinal;
             printTest("GPU->CPU",
-                      mkGpu(0, 0), mkCpu(0, firstNuma));
+                      mkGpu(0, 0), mkCpu(0, firstOrdinal));
         }
 
         printf("\n");

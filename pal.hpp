@@ -51,6 +51,8 @@ struct GpuInfo {
 };
 
 struct CpuInfo {
+    int32_t cpuOrdinal; // the index of the processor in the list of processors
+    uint32_t osIndex; // the os_index of the physical core
     int numaId;
 };
 
@@ -64,7 +66,7 @@ struct CUIDTXprocessor {
     int rank;
     union {
         struct { int deviceId; } gpu;
-        struct { int numaId;  } cpu;
+        struct { int cpuOrdinal;  } cpu;
     };
     CUIDTXprocessorType type;
 };
@@ -73,22 +75,14 @@ inline bool operator<(const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
     if (a.rank != b.rank) return a.rank < b.rank;
     if (a.type != b.type) return a.type < b.type;
     if (a.type == CUIDTX_PROCESSOR_TYPE_GPU) return a.gpu.deviceId < b.gpu.deviceId;
-    return a.cpu.numaId < b.cpu.numaId;
+    return a.cpu.cpuOrdinal < b.cpu.cpuOrdinal;
 }
 
 inline bool operator==(const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
     if (a.rank != b.rank || a.type != b.type) return false;
     if (a.type == CUIDTX_PROCESSOR_TYPE_GPU) return a.gpu.deviceId == b.gpu.deviceId;
-    return a.cpu.numaId == b.cpu.numaId;
+    return a.cpu.cpuOrdinal == b.cpu.cpuOrdinal;
 }
-
-struct TopologyNode {
-    CUIDTXprocessor handle;
-    union {
-        GpuInfo gpu;
-        CpuInfo cpu;
-    };
-};
 
 struct ProcessorInfo {
     CUIDTXprocessorType type;
@@ -98,6 +92,25 @@ struct ProcessorInfo {
     };
 };
 
+class Processor {
+public:
+    Processor(const ProcessorInfo &info, int rank)
+    : info_(info)
+    {
+        std::memset(&handle_, 0, sizeof(handle_));
+        handle_.rank = rank;
+        handle_.type = info.type;
+        switch (info.type) {
+            case CUIDTX_PROCESSOR_TYPE_GPU: handle_.gpu.deviceId = info.gpu.deviceId; break;
+            case CUIDTX_PROCESSOR_TYPE_CPU: handle_.cpu.cpuOrdinal = info.cpu.cpuOrdinal; break;
+            default: break;
+        }
+    }
+
+    CUIDTXprocessor handle_ {};
+    ProcessorInfo info_ {};
+};
+
 /* ==================================================================
  *  Utility functions
  * ================================================================== */
@@ -105,7 +118,7 @@ struct ProcessorInfo {
 inline std::string handleStr(const CUIDTXprocessor& h) {
     if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
         return "GPU(" + std::to_string(h.rank) + "," + std::to_string(h.gpu.deviceId) + ")";
-    return "CPU(" + std::to_string(h.rank) + "," + std::to_string(h.cpu.numaId) + ")";
+    return "CPU(" + std::to_string(h.rank) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
 }
 
 inline std::string busKey(const char* id) {
@@ -129,7 +142,8 @@ class IProcessorAbstractionLayer {
 public:
     virtual ~IProcessorAbstractionLayer() = default;
 
-    [[nodiscard]] virtual std::vector<TopologyNode> enumerateProcessors() = 0;
+    [[nodiscard]] virtual CUIDTXprocessorType processorType() const = 0;
+    [[nodiscard]] virtual std::vector<ProcessorInfo> enumerateProcessors() = 0;
 };
 
 /* ==================================================================
@@ -144,7 +158,8 @@ public:
     CudaPAL(const CudaPAL&) = delete;
     CudaPAL& operator=(const CudaPAL&) = delete;
 
-    [[nodiscard]] std::vector<TopologyNode> enumerateProcessors() override;
+    [[nodiscard]] CUIDTXprocessorType processorType() const override { return CUIDTX_PROCESSOR_TYPE_GPU; }
+    [[nodiscard]] std::vector<ProcessorInfo> enumerateProcessors() override;
 };
 
 class CPUPAL final : public IProcessorAbstractionLayer {
@@ -155,5 +170,6 @@ public:
     CPUPAL(const CPUPAL&) = delete;
     CPUPAL& operator=(const CPUPAL&) = delete;
 
-    [[nodiscard]] std::vector<TopologyNode> enumerateProcessors() override;
+    [[nodiscard]] CUIDTXprocessorType processorType() const override { return CUIDTX_PROCESSOR_TYPE_CPU; }
+    [[nodiscard]] std::vector<ProcessorInfo> enumerateProcessors() override;
 };

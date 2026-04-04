@@ -43,8 +43,8 @@ static std::string cudaUuidToStr(const cudaUUID_t& u) {
     return buf;
 }
 
-std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
-    std::vector<TopologyNode> result;
+std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
+    std::vector<ProcessorInfo> result;
 
     PAL_CHK_NVML(nvmlInit_v2());
 
@@ -68,17 +68,15 @@ std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
     int nGpus = std::min(nCuda, MAX_GPUS);
 
     for (int ci = 0; ci < nGpus; ci++) {
-        TopologyNode node;
-        memset(&node, 0, sizeof(node));
-        node.handle.rank = 0;
-        node.handle.type = CUIDTX_PROCESSOR_TYPE_GPU;
-        node.handle.gpu.deviceId = ci;
-        GpuInfo& G = node.gpu;
+        ProcessorInfo info;
+        memset(&info, 0, sizeof(info));
+        info.type = CUIDTX_PROCESSOR_TYPE_GPU;
+        GpuInfo& G = info.gpu;
+        G.deviceId = ci;
         G.numaId = -1;
 
         cudaDeviceProp prop;
         PAL_CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
-        G.deviceId = ci;
         G.ccMajor = prop.major;
         G.ccMinor = prop.minor;
 
@@ -141,7 +139,7 @@ std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
             break;
         }
 
-        result.push_back(node);
+        result.push_back(info);
     }
 
     PAL_CHK_NVML(nvmlShutdown());
@@ -154,8 +152,8 @@ std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
 
 CPUPAL::~CPUPAL() = default;
 
-std::vector<TopologyNode> CPUPAL::enumerateProcessors() {
-    std::vector<TopologyNode> result;
+std::vector<ProcessorInfo> CPUPAL::enumerateProcessors() {
+    std::vector<ProcessorInfo> result;
 
     hwloc_topology_t topo;
     hwloc_topology_init(&topo);
@@ -165,22 +163,40 @@ std::vector<TopologyNode> CPUPAL::enumerateProcessors() {
     if (hwloc_get_cpubind(topo, binding, HWLOC_CPUBIND_PROCESS) != 0)
         hwloc_bitmap_fill(binding);
 
-    int nNuma = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_NUMANODE);
-    for (int i = 0; i < nNuma; i++) {
-        hwloc_obj_t numaObj = hwloc_get_obj_by_type(topo, HWLOC_OBJ_NUMANODE, i);
-        if (!numaObj) continue;
+    const int numCores = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_CORE);
+    int32_t cpuOrdinal = 0;
 
-        hwloc_cpuset_t numaCpuset = numaObj->cpuset;
-        if (!numaCpuset) continue;
-        if (!hwloc_bitmap_intersects(binding, numaCpuset)) continue;
+    for (int coreIdx = 0; coreIdx < numCores; coreIdx++) {
+        hwloc_obj_t core = hwloc_get_obj_by_type(topo, HWLOC_OBJ_CORE, coreIdx);
+        if (!core) continue;
 
-        TopologyNode node;
-        memset(&node, 0, sizeof(node));
-        node.handle.rank = 0;
-        node.handle.type = CUIDTX_PROCESSOR_TYPE_CPU;
-        node.handle.cpu.numaId = (int)numaObj->os_index;
-        node.cpu.numaId = (int)numaObj->os_index;
-        result.push_back(node);
+        const hwloc_cpuset_t cpuset = core->cpuset ? core->cpuset : core->complete_cpuset;
+        if (!cpuset) continue;
+
+        const int numPus = hwloc_get_nbobjs_inside_cpuset_by_type(topo, cpuset, HWLOC_OBJ_PU);
+        if (numPus <= 0) continue;
+
+        bool withinBinding = false;
+        for (int puIdx = 0; puIdx < numPus; puIdx++) {
+            hwloc_obj_t pu = hwloc_get_obj_inside_cpuset_by_type(topo, cpuset, HWLOC_OBJ_PU, puIdx);
+            if (pu && hwloc_bitmap_isset(binding, pu->os_index)) {
+                withinBinding = true;
+                break;
+            }
+        }
+        if (!withinBinding) continue;
+
+        ProcessorInfo info;
+        memset(&info, 0, sizeof(info));
+        info.type = CUIDTX_PROCESSOR_TYPE_CPU;
+        info.cpu.cpuOrdinal = cpuOrdinal;
+        info.cpu.osIndex = static_cast<uint32_t>(core->os_index);
+
+        const hwloc_nodeset_t nodeset = core->nodeset ? core->nodeset : core->complete_nodeset;
+        info.cpu.numaId = nodeset ? hwloc_bitmap_first(nodeset) : -1;
+
+        result.push_back(info);
+        cpuOrdinal++;
     }
 
     hwloc_bitmap_free(binding);

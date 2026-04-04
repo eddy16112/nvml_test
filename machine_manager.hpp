@@ -6,7 +6,7 @@
 #include <vector>
 #include <map>
 #include <utility>
-
+#include <memory>
 
 typedef std::pair<CUIDTXprocessor, CUIDTXprocessor> CUIDTXprocessorPair;
 
@@ -19,11 +19,13 @@ struct MachineManager {
     char hostname[HOST_SZ];
     int  rank;
 
-    using ProcessorMap = std::map<CUIDTXprocessorType,
-                                    std::vector<TopologyNode>>;
+    using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
     ProcessorMap processors_;
 
     std::map<CUIDTXprocessorPair, std::string> topology;
+
+    // Load processors from a PAL
+    void loadPAL(IProcessorAbstractionLayer &pal);
 
     void buildTopology(const MachineManager& remote);
 
@@ -32,21 +34,21 @@ struct MachineManager {
         return (it != topology.end()) ? it->second : "";
     }
 
-    const std::vector<TopologyNode>& gpus() const {
-        static const std::vector<TopologyNode> empty;
+    const std::vector<std::unique_ptr<Processor>>& gpus() const {
+        static const std::vector<std::unique_ptr<Processor>> empty;
         auto it = processors_.find(CUIDTX_PROCESSOR_TYPE_GPU);
         return (it != processors_.end()) ? it->second : empty;
     }
 
-    const std::vector<TopologyNode>& cpus() const {
-        static const std::vector<TopologyNode> empty;
+    const std::vector<std::unique_ptr<Processor>>& cpus() const {
+        static const std::vector<std::unique_ptr<Processor>> empty;
         auto it = processors_.find(CUIDTX_PROCESSOR_TYPE_CPU);
         return (it != processors_.end()) ? it->second : empty;
     }
 };
 
 void collectAllNodes(const MachineManager& M,
-                     std::vector<const TopologyNode*>& out);
+                     std::vector<const Processor*>& out);
 
 std::string queryConnection(const std::vector<MachineManager>& managers,
                             const CUIDTXprocessor& a,
