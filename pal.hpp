@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#define PHASE3_USE_NVML
+
 static constexpr int MAX_GPUS       = 16;
 static constexpr int MAX_NUMAS      = 16;
 static constexpr int MAX_TOPO_NODES = 32;
@@ -102,7 +104,9 @@ inline std::string busKey(const char* id) {
     std::string s(id);
     for (auto& c : s) c = (char)std::tolower((unsigned char)c);
     auto p = s.find(':');
-    return (p != std::string::npos) ? s.substr(p + 1) : s;
+    if (p != std::string::npos && p < 8)
+        s = std::string(8 - p, '0') + s;
+    return s;
 }
 
 inline bool sameBus(const char* a, const char* b) {

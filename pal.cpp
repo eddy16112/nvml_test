@@ -33,6 +33,16 @@
 
 CudaPAL::~CudaPAL() = default;
 
+static std::string cudaUuidToStr(const cudaUUID_t& u) {
+    char buf[80];
+    const unsigned char* b = (const unsigned char*)u.bytes;
+    snprintf(buf, sizeof(buf),
+        "GPU-%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        b[0],b[1],b[2],b[3], b[4],b[5], b[6],b[7],
+        b[8],b[9], b[10],b[11],b[12],b[13],b[14],b[15]);
+    return buf;
+}
+
 std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
     std::vector<TopologyNode> result;
 
@@ -44,11 +54,13 @@ std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
 
     nvmlDevice_t hAll[MAX_GPUS];
     char allBusIds[MAX_GPUS][BUSID_SZ] = {};
+    char allUuids[MAX_GPUS][UUID_SZ] = {};
     for (int i = 0; i < nAll; i++) {
         PAL_CHK_NVML(nvmlDeviceGetHandleByIndex_v2(i, &hAll[i]));
         nvmlPciInfo_t pci;
         PAL_CHK_NVML(nvmlDeviceGetPciInfo_v3(hAll[i], &pci));
         strncpy(allBusIds[i], pci.busId, BUSID_SZ - 1);
+        PAL_CHK_NVML(nvmlDeviceGetUUID(hAll[i], allUuids[i], UUID_SZ));
     }
 
     int nCuda = 0;
@@ -64,19 +76,19 @@ std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
         GpuInfo& G = node.gpu;
         G.numaId = -1;
 
-        char cbid[BUSID_SZ] = {};
-        PAL_CHK_CUDA(cudaDeviceGetPCIBusId(cbid, BUSID_SZ, ci));
         cudaDeviceProp prop;
         PAL_CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
         G.deviceId = ci;
         G.ccMajor = prop.major;
         G.ccMinor = prop.minor;
 
+        std::string cudaUuid = cudaUuidToStr(prop.uuid);
+
         for (int k = 0; k < nAll; k++) {
-            if (!sameBus(cbid, allBusIds[k])) continue;
+            if (cudaUuid != allUuids[k]) continue;
             nvmlDevice_t hDev = hAll[k];
 
-            PAL_CHK_NVML(nvmlDeviceGetUUID(hDev, G.uuid, UUID_SZ));
+            strncpy(G.uuid, allUuids[k], UUID_SZ - 1);
             strncpy(G.busId, allBusIds[k], BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, G.name, NAME_SZ));
 
