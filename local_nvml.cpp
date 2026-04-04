@@ -65,8 +65,7 @@ static HandlePair canonicalPair(const Handle& a, const Handle& b) {
 struct RankManager {
     RankData data;
     std::map<HandlePair, std::string> topology;
-
-    void buildTopology(const std::vector<RankData>& allRanks);
+    void buildTopology(const RankData& remote);
 
     std::string query(const Handle& a, const Handle& b) const {
         auto it = topology.find(canonicalPair(a, b));
@@ -99,15 +98,15 @@ static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
 }
 
 static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
-                              const std::vector<RankData>& allRanks,
-                              const std::string& host) {
+                              const RankData& srcRank,
+                              const RankData& dstRank) {
     auto isKnownGpu = [&](const char* bid) -> bool {
-        for (auto& R : allRanks) {
-            if (std::string(R.hostname) != host) continue;
-            for (int g = 0; g < R.nGpus; g++)
-                if (sameBus(bid, R.gpus[g].gpu.busId))
-                    return true;
-        }
+        for (int g = 0; g < srcRank.nGpus; g++)
+            if (sameBus(bid, srcRank.gpus[g].gpu.busId))
+                return true;
+        for (int g = 0; g < dstRank.nGpus; g++)
+            if (sameBus(bid, dstRank.gpus[g].gpu.busId))
+                return true;
         return false;
     };
 
@@ -155,8 +154,7 @@ static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
 static std::string resolveGpuGpu(
         const GpuInfo& gi, const GpuInfo& gj,
         bool sameNode,
-        const std::vector<RankData>& allRanks,
-        const std::string& hostname) {
+        const RankData& srcRank, const RankData& dstRank) {
 
     if (sameBus(gi.busId, gj.busId))
         return "X";
@@ -168,7 +166,7 @@ static std::string resolveGpuGpu(
     if (nvl > 0)
         return "NV" + std::to_string(nvl);
 
-    int nvs = countNvSwitchLinks(gi, gj, allRanks, hostname);
+    int nvs = countNvSwitchLinks(gi, gj, srcRank, dstRank);
     if (nvs > 0)
         return "NV" + std::to_string(nvs);
 
@@ -199,14 +197,13 @@ static std::string resolveCpuCpu(const CpuInfo& ci, const CpuInfo& cj,
 static std::string resolveNodeConnection(
         const TopologyNode& src, const TopologyNode& dst,
         bool sameNode,
-        const std::vector<RankData>& allRanks,
-        const std::string& hostname) {
+        const RankData& srcRank, const RankData& dstRank) {
 
     HandleType st = src.handle.type;
     HandleType dt = dst.handle.type;
 
     if (st == GPU_HANDLE && dt == GPU_HANDLE)
-        return resolveGpuGpu(src.gpu, dst.gpu, sameNode, allRanks, hostname);
+        return resolveGpuGpu(src.gpu, dst.gpu, sameNode, srcRank, dstRank);
 
     if (st == GPU_HANDLE && dt == CPU_HANDLE)
         return resolveGpuCpu(src.gpu, dst.cpu, sameNode);
@@ -251,50 +248,28 @@ static void collectAllNodes(const RankData& R,
             out.push_back(&R.cpus[i]);
 }
 
-void RankManager::buildTopology(const std::vector<RankData>& allRanks) {
-    topology.clear();
+void RankManager::buildTopology(const RankData& remote) {
+    bool sameNode = (std::string(remote.hostname) == std::string(data.hostname));
 
-#ifdef PHASE3_USE_NVML
-    CHK_NVML(nvmlInit_v2());
-#endif
-
-    const std::string myHost(data.hostname);
-
-    std::vector<const TopologyNode*> srcNodes;
+    std::vector<const TopologyNode*> srcNodes, dstNodes;
     collectAllNodes(data, srcNodes);
+    collectAllNodes(remote, dstNodes);
 
     for (auto* srcNode : srcNodes) {
-        const Handle& src = srcNode->handle;
+        for (auto* dstNode : dstNodes) {
+            HandlePair cp = canonicalPair(srcNode->handle, dstNode->handle);
+            if (cp.first.rank != data.rank)
+                continue;
+            if (topology.count(cp))
+                continue;
 
-        for (size_t r = 0; r < allRanks.size(); r++) {
-            const RankData& dstRank = allRanks[r];
-            bool sameNode = (std::string(dstRank.hostname) == myHost);
+            std::string conn = resolveNodeConnection(
+                *srcNode, *dstNode,
+                sameNode, data, remote);
 
-            std::vector<const TopologyNode*> dstNodes;
-            collectAllNodes(dstRank, dstNodes);
-
-            for (auto* dstNode : dstNodes) {
-                const Handle& dst = dstNode->handle;
-
-                HandlePair cp = canonicalPair(src, dst);
-                if (cp.first.rank != data.rank)
-                    continue;
-
-                if (topology.count(cp))
-                    continue;
-
-                std::string conn = resolveNodeConnection(
-                    *srcNode, *dstNode,
-                    sameNode, allRanks, myHost);
-
-                topology[cp] = conn;
-            }
+            topology[cp] = conn;
         }
     }
-
-#ifdef PHASE3_USE_NVML
-    CHK_NVML(nvmlShutdown());
-#endif
 }
 
 /* ==================================================================
@@ -557,11 +532,22 @@ int main(int argc, char** argv) {
     if (gRank == 0)
         printf("[Phase 3] Building topology maps ...\n");
 
+#ifdef PHASE3_USE_NVML
+    CHK_NVML(nvmlInit_v2());
+#endif
     std::vector<RankManager> managers(ws);
     for (int r = 0; r < ws; r++) {
         managers[r].data = allData[r];
-        managers[r].buildTopology(allData);
     }
+    
+    for (int r = 0; r < ws; r++) {
+        for (int d = 0; d < ws; d++) {
+            managers[r].buildTopology(allData[d]);
+        }
+    }
+#ifdef PHASE3_USE_NVML
+    CHK_NVML(nvmlShutdown());
+#endif
 
     /* Phase 4 – print */
     if (gRank == 0) {
