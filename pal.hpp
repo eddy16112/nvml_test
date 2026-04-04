@@ -52,7 +52,6 @@ struct GpuInfo {
 
 struct CpuInfo {
     int numaId;
-    int nCores;
 };
 
 enum CUIDTXprocessorType : uint8_t {
@@ -85,6 +84,14 @@ inline bool operator==(const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
 
 struct TopologyNode {
     CUIDTXprocessor handle;
+    union {
+        GpuInfo gpu;
+        CpuInfo cpu;
+    };
+};
+
+struct ProcessorInfo {
+    CUIDTXprocessorType type;
     union {
         GpuInfo gpu;
         CpuInfo cpu;

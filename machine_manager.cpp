@@ -211,7 +211,6 @@ struct GNode {
     uint64_t memMB = 0;
     int pcieGen = 0, pcieWidth = 0;
     int numaId = -1;
-    int nCores = 0;
     std::vector<int> ownerRanks;
 
     bool isGpu() const { return handle.type == CUIDTX_PROCESSOR_TYPE_GPU; }
@@ -252,7 +251,6 @@ void printTopology(const std::vector<MachineManager>& managers) {
             } else {
                 const CpuInfo& ci = np->cpu;
                 gn.numaId = ci.numaId;
-                gn.nCores = ci.nCores;
             }
 
             std::string k = gn.nodeKey();
@@ -333,8 +331,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
         }
         for (auto& n : M.cpus()) {
             std::string hl = handleStr(n.handle);
-            const CpuInfo& ci = n.cpu;
-            printf("    %-12s  %d core(s)\n", hl.c_str(), ci.nCores);
+            printf("    %-12s  NUMA %d\n", hl.c_str(), n.cpu.numaId);
         }
     }
 
@@ -350,8 +347,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
             if (g.ccMajor) printf("  CC%d.%d", g.ccMajor, g.ccMinor);
             if (g.numaId >= 0) printf("  NUMA:%d", g.numaId);
         } else {
-            printf("  %-12s  %-16s  %-24s  %-16s  %d core(s)",
-                   label.c_str(), "", "", g.host.c_str(), g.nCores);
+            printf("  %-12s  %-16s  %-24s  %-16s  NUMA %d",
+                   label.c_str(), "", "", g.host.c_str(), g.numaId);
         }
         printf("  Rank:");
         for (size_t k = 0; k < g.ownerRanks.size(); k++)

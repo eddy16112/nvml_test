@@ -174,25 +174,12 @@ std::vector<TopologyNode> CPUPAL::enumerateProcessors() {
         if (!numaCpuset) continue;
         if (!hwloc_bitmap_intersects(binding, numaCpuset)) continue;
 
-        hwloc_cpuset_t overlap = hwloc_bitmap_alloc();
-        hwloc_bitmap_and(overlap, binding, numaCpuset);
-        int nCores = 0;
-        int nAllCores = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_CORE);
-        for (int c = 0; c < nAllCores; c++) {
-            hwloc_obj_t core = hwloc_get_obj_by_type(topo, HWLOC_OBJ_CORE, c);
-            if (core && core->cpuset &&
-                hwloc_bitmap_intersects(overlap, core->cpuset))
-                nCores++;
-        }
-        hwloc_bitmap_free(overlap);
-
         TopologyNode node;
         memset(&node, 0, sizeof(node));
         node.handle.rank = 0;
         node.handle.type = CUIDTX_PROCESSOR_TYPE_CPU;
         node.handle.cpu.numaId = (int)numaObj->os_index;
         node.cpu.numaId = (int)numaObj->os_index;
-        node.cpu.nCores = nCores;
         result.push_back(node);
     }
 
