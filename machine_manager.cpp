@@ -369,6 +369,20 @@ void printTopology(const std::vector<MachineManager>& managers) {
         printf("\n");
     }
 
+    /* ---- Per-Manager Topology Maps ---- */
+    printf("\n--- Per-Manager Topology Maps ---\n");
+    for (int r = 0; r < ws; r++) {
+        const auto& M = managers[r];
+        printf("\n  Manager[%d] @ %s  (%zu entries)\n",
+               r, M.hostname, M.topology.size());
+        for (auto& [pair, conn] : M.topology) {
+            printf("    %s <-> %s : %s\n",
+                   topoNodeStr(pair.first).c_str(),
+                   topoNodeStr(pair.second).c_str(),
+                   conn.c_str());
+        }
+    }
+
     /* ---- Topology Matrix ---- */
     printf("\n--- Topology Matrix ---\n");
     printf("  Legend:  NVx = NVLink (x links)      PIX = single PCIe switch\n");
