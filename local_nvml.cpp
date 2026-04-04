@@ -156,11 +156,8 @@ static std::string resolveGpuGpu(
         bool sameNode,
         const RankData& srcRank, const RankData& dstRank) {
 
-    if (sameBus(gi.busId, gj.busId))
+    if (sameNode && sameBus(gi.busId, gj.busId))
         return "X";
-
-    if (!sameNode)
-        return "NET";
 
     int nvl = countNvLinksByBusId(gi, gj.busId);
     if (nvl > 0)
@@ -169,6 +166,9 @@ static std::string resolveGpuGpu(
     int nvs = countNvSwitchLinks(gi, gj, srcRank, dstRank);
     if (nvs > 0)
         return "NV" + std::to_string(nvs);
+
+    if (!sameNode)
+        return "NET";
 
     return resolvePcie(gi, gj);
 }
