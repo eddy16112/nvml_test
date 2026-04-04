@@ -199,16 +199,16 @@ static std::string resolveNodeConnection(
         bool sameNode,
         const RankData& srcRank, const RankData& dstRank) {
 
-    HandleType st = src.handle.type;
-    HandleType dt = dst.handle.type;
+    CUIDTXprocessorType st = src.handle.type;
+    CUIDTXprocessorType dt = dst.handle.type;
 
-    if (st == GPU_HANDLE && dt == GPU_HANDLE)
+    if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
         return resolveGpuGpu(src.gpu, dst.gpu, sameNode, srcRank, dstRank);
 
-    if (st == GPU_HANDLE && dt == CPU_HANDLE)
+    if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
         return resolveGpuCpu(src.gpu, dst.cpu, sameNode);
 
-    if (st == CPU_HANDLE && dt == GPU_HANDLE)
+    if (st == CUIDTX_PROCESSOR_TYPE_CPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
         return resolveGpuCpu(dst.gpu, src.cpu, sameNode);
 
     return resolveCpuCpu(src.cpu, dst.cpu, sameNode);
@@ -244,7 +244,7 @@ static void collectAllNodes(const RankData& R,
                             std::vector<const TopologyNode*>& out) {
     for (int i = 0; i < R.nGpus; i++) out.push_back(&R.gpus[i]);
     for (int i = 0; i < MAX_NUMAS; i++)
-        if (R.cpus[i].handle.type == CPU_HANDLE)
+        if (R.cpus[i].handle.type == CUIDTX_PROCESSOR_TYPE_CPU)
             out.push_back(&R.cpus[i]);
 }
 
@@ -287,7 +287,7 @@ struct GNode {
     int nCores = 0;
     std::vector<int> ownerRanks;
 
-    bool isGpu() const { return handle.type == GPU_HANDLE; }
+    bool isGpu() const { return handle.type == CUIDTX_PROCESSOR_TYPE_GPU; }
 
     std::string nodeKey() const {
         if (isGpu()) return uuid;
@@ -404,7 +404,7 @@ static void printTopology(const std::vector<RankManager>& managers) {
             printf("\n");
         }
         for (int i = 0; i < MAX_NUMAS; i++) {
-            if (R.cpus[i].handle.type != CPU_HANDLE) continue;
+            if (R.cpus[i].handle.type != CUIDTX_PROCESSOR_TYPE_CPU) continue;
             std::string hl = handleStr(R.cpus[i].handle);
             const CpuInfo& ci = R.cpus[i].cpu;
             printf("    %-12s  %d core(s)\n", hl.c_str(), ci.nCores);
@@ -562,7 +562,7 @@ int main(int argc, char** argv) {
         auto mkGpuHandle = [](int rank, int devId) -> Handle {
             Handle h;
             h.rank = rank;
-            h.type = GPU_HANDLE;
+            h.type = CUIDTX_PROCESSOR_TYPE_GPU;
             h.gpu.deviceId = devId;
             return h;
         };
@@ -570,7 +570,7 @@ int main(int argc, char** argv) {
         auto mkCpuHandle = [](int rank, int numaId) -> Handle {
             Handle h;
             h.rank = rank;
-            h.type = CPU_HANDLE;
+            h.type = CUIDTX_PROCESSOR_TYPE_CPU;
             h.cpu.numaId = numaId;
             return h;
         };
@@ -601,7 +601,7 @@ int main(int argc, char** argv) {
         }
 
         for (int i = 0; i < MAX_NUMAS; i++) {
-            if (managers[0].data.cpus[i].handle.type == CPU_HANDLE) {
+            if (managers[0].data.cpus[i].handle.type == CUIDTX_PROCESSOR_TYPE_CPU) {
                 printTest("GPU->CPU",
                           mkGpuHandle(0, 0),
                           mkCpuHandle(0, managers[0].data.cpus[i].cpu.numaId));

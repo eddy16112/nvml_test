@@ -71,7 +71,7 @@ std::vector<TopologyNode> CudaPAL::enumerateProcessors() {
         TopologyNode node;
         memset(&node, 0, sizeof(node));
         node.handle.rank = 0;
-        node.handle.type = GPU_HANDLE;
+        node.handle.type = CUIDTX_PROCESSOR_TYPE_GPU;
         node.handle.gpu.deviceId = ci;
         GpuInfo& G = node.gpu;
         G.numaId = -1;
@@ -189,7 +189,7 @@ std::vector<TopologyNode> CPUPAL::enumerateProcessors() {
         TopologyNode node;
         memset(&node, 0, sizeof(node));
         node.handle.rank = 0;
-        node.handle.type = CPU_HANDLE;
+        node.handle.type = CUIDTX_PROCESSOR_TYPE_CPU;
         node.handle.cpu.numaId = (int)numaObj->os_index;
         node.cpu.numaId = (int)numaObj->os_index;
         node.cpu.nCores = nCores;

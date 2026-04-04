@@ -55,9 +55,10 @@ struct CpuInfo {
     int nCores;
 };
 
-enum HandleType {
-    GPU_HANDLE = 0,
-    CPU_HANDLE = 1,
+enum CUIDTXprocessorType : uint8_t {
+    CUIDTX_PROCESSOR_TYPE_GPU = 0,
+    CUIDTX_PROCESSOR_TYPE_CPU = 1,
+    CUIDTX_PROCESSOR_TYPE_MAX = 0xFF
 };
 
 struct Handle {
@@ -66,19 +67,19 @@ struct Handle {
         struct { int deviceId; } gpu;
         struct { int numaId;  } cpu;
     };
-    HandleType type;
+    CUIDTXprocessorType type;
 };
 
 inline bool operator<(const Handle& a, const Handle& b) {
     if (a.rank != b.rank) return a.rank < b.rank;
     if (a.type != b.type) return a.type < b.type;
-    if (a.type == GPU_HANDLE) return a.gpu.deviceId < b.gpu.deviceId;
+    if (a.type == CUIDTX_PROCESSOR_TYPE_GPU) return a.gpu.deviceId < b.gpu.deviceId;
     return a.cpu.numaId < b.cpu.numaId;
 }
 
 inline bool operator==(const Handle& a, const Handle& b) {
     if (a.rank != b.rank || a.type != b.type) return false;
-    if (a.type == GPU_HANDLE) return a.gpu.deviceId == b.gpu.deviceId;
+    if (a.type == CUIDTX_PROCESSOR_TYPE_GPU) return a.gpu.deviceId == b.gpu.deviceId;
     return a.cpu.numaId == b.cpu.numaId;
 }
 
@@ -95,7 +96,7 @@ struct TopologyNode {
  * ================================================================== */
 
 inline std::string handleStr(const Handle& h) {
-    if (h.type == GPU_HANDLE)
+    if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
         return "GPU(" + std::to_string(h.rank) + "," + std::to_string(h.gpu.deviceId) + ")";
     return "CPU(" + std::to_string(h.rank) + "," + std::to_string(h.cpu.numaId) + ")";
 }
