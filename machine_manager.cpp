@@ -133,12 +133,10 @@ static std::string resolveGpuCpu(const GpuInfo& g, const CpuInfo& c,
 
 static std::string resolveCpuCpu(const CpuInfo& ci, const CpuInfo& cj,
                                  bool sameNode) {
-    if (ci.cpuOrdinal == cj.cpuOrdinal && sameNode)
+    if (ci.numaId == cj.numaId && sameNode)
         return "X";
     if (!sameNode)
         return "NET";
-    if (ci.numaId == cj.numaId)
-        return "NODE";
     return "SYS";
 }
 
@@ -185,7 +183,7 @@ void MachineManager::buildTopology(const MachineManager& remote) {
 
     for (auto* srcNode : srcNodes) {
         for (auto* dstNode : dstNodes) {
-            CUIDTXprocessorPair cp = canonicalPair(srcNode->handle_, dstNode->handle_);
+            TopologyNode::Pair cp = canonicalPair(srcNode->topologyNode_, dstNode->topologyNode_);
             if (cp.first.rank != rank)
                 continue;
             if (topology.count(cp))
@@ -204,11 +202,25 @@ void MachineManager::buildTopology(const MachineManager& remote) {
  *  queryConnection
  * ================================================================== */
 
+static TopologyNode toTopoNode(const CUIDTXprocessor& h) {
+    int localId = (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
+                  ? h.gpu.deviceId
+                  : h.cpu.cpuOrdinal;
+    return TopologyNode(h.rank, h.type, localId);
+}
+
+std::string MachineManager::query(const CUIDTXprocessor& a,
+                                  const CUIDTXprocessor& b) const {
+    TopologyNode ta = toTopoNode(a);
+    TopologyNode tb = toTopoNode(b);
+    auto it = topology.find(canonicalPair(ta, tb));
+    return (it != topology.end()) ? it->second : "";
+}
+
 std::string queryConnection(const std::vector<MachineManager>& managers,
                             const CUIDTXprocessor& a,
                             const CUIDTXprocessor& b) {
-    CUIDTXprocessorPair cp = canonicalPair(a, b);
-    int owner = cp.first.rank;
+    int owner = std::min(a.rank, b.rank);
     if (owner < 0 || owner >= (int)managers.size())
         return "";
     return managers[owner].query(a, b);
@@ -219,21 +231,20 @@ std::string queryConnection(const std::vector<MachineManager>& managers,
  * ================================================================== */
 
 struct GNode {
-    CUIDTXprocessor handle;
+    TopologyNode tnode;
     std::string host;
     std::string uuid, busId, name;
     int ccMajor = 0, ccMinor = 0;
     uint64_t memMB = 0;
     int pcieGen = 0, pcieWidth = 0;
     int numaId = -1;
-    uint32_t osIndex = 0;
     std::vector<int> ownerRanks;
 
-    bool isGpu() const { return handle.type == CUIDTX_PROCESSOR_TYPE_GPU; }
+    bool isGpu() const { return tnode.type == CUIDTX_PROCESSOR_TYPE_GPU; }
 
     std::string nodeKey() const {
         if (isGpu()) return uuid;
-        return host + ":core" + std::to_string(osIndex);
+        return host + ":numa" + std::to_string(numaId);
     }
 };
 
@@ -250,7 +261,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
         collectAllNodes(M, rnodes);
         for (auto* np : rnodes) {
             GNode gn;
-            gn.handle = np->handle_;
+            gn.tnode  = np->topologyNode_;
             gn.host   = M.hostname;
 
             if (gn.isGpu()) {
@@ -267,7 +278,6 @@ void printTopology(const std::vector<MachineManager>& managers) {
             } else {
                 const CpuInfo& ci = np->info_.cpu;
                 gn.numaId = ci.numaId;
-                gn.osIndex = ci.osIndex;
             }
 
             std::string k = gn.nodeKey();
@@ -284,7 +294,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
         if (a.isGpu() != b.isGpu()) return a.isGpu() > b.isGpu();
         if (a.isGpu())
             return busKey(a.busId.c_str()) < busKey(b.busId.c_str());
-        return a.osIndex < b.osIndex;
+        return a.numaId < b.numaId;
     });
     key2g.clear();
     for (int i = 0; i < (int)G.size(); i++) key2g[G[i].nodeKey()] = i;
@@ -300,9 +310,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
         for (int j = 0; j < N; j++) {
             if (i == j) { conn[i][j] = "X"; continue; }
 
-            const CUIDTXprocessor& hi = G[i].handle;
-            const CUIDTXprocessor& hj = G[j].handle;
-            CUIDTXprocessorPair cp = canonicalPair(hi, hj);
+            TopologyNode::Pair cp = canonicalPair(G[i].tnode, G[j].tnode);
             int owner = cp.first.rank;
 
             auto it = managers[owner].topology.find(cp);
@@ -319,7 +327,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     printf("=========================================================================\n");
     printf("                    GLOBAL TOPOLOGY REPORT\n");
     printf("=========================================================================\n");
-    printf("  %d rank(s),  %d GPU(s),  %d CPU core(s)\n", ws, nGpus, nCpus);
+    printf("  %d rank(s),  %d GPU(s),  %d CPU NUMA node(s)\n", ws, nGpus, nCpus);
 #ifdef PHASE3_USE_NVML
     printf("  (mode: NVML live query)\n");
 #else
@@ -354,10 +362,10 @@ void printTopology(const std::vector<MachineManager>& managers) {
     }
 
     /* ---- All Unique Nodes ---- */
-    printf("\n--- All Unique Nodes (%d GPU, %d CPU core) ---\n\n", nGpus, nCpus);
+    printf("\n--- All Unique Nodes (%d GPU, %d CPU NUMA) ---\n\n", nGpus, nCpus);
     for (int i = 0; i < N; i++) {
         const GNode& g = G[i];
-        std::string label = handleStr(g.handle);
+        std::string label = topoNodeStr(g.tnode);
         if (g.isGpu()) {
             printf("  %-12s  %-16s  %-24s  %-16s  %5lu MB",
                    label.c_str(), g.busId.c_str(), g.name.c_str(),
@@ -384,7 +392,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     std::vector<std::string> labels(N);
     int maxLabelLen = 0;
     for (int i = 0; i < N; i++) {
-        labels[i] = handleStr(G[i].handle);
+        labels[i] = topoNodeStr(G[i].tnode);
         maxLabelLen = std::max(maxLabelLen, (int)labels[i].size());
     }
     int cw = std::max(maxLabelLen + 2, 8);

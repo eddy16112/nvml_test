@@ -71,19 +71,6 @@ struct CUIDTXprocessor {
     CUIDTXprocessorType type;
 };
 
-inline bool operator<(const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
-    if (a.rank != b.rank) return a.rank < b.rank;
-    if (a.type != b.type) return a.type < b.type;
-    if (a.type == CUIDTX_PROCESSOR_TYPE_GPU) return a.gpu.deviceId < b.gpu.deviceId;
-    return a.cpu.cpuOrdinal < b.cpu.cpuOrdinal;
-}
-
-inline bool operator==(const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
-    if (a.rank != b.rank || a.type != b.type) return false;
-    if (a.type == CUIDTX_PROCESSOR_TYPE_GPU) return a.gpu.deviceId == b.gpu.deviceId;
-    return a.cpu.cpuOrdinal == b.cpu.cpuOrdinal;
-}
-
 struct ProcessorInfo {
     CUIDTXprocessorType type;
     union {
@@ -92,10 +79,64 @@ struct ProcessorInfo {
     };
 };
 
+struct TopologyNode
+{
+    int rank;
+    CUIDTXprocessorType type;
+    int localId; // GPU: deviceId, CPU: numaId
+
+    TopologyNode(int rank, CUIDTXprocessorType type, const ProcessorInfo &info)
+    : rank(rank)
+    , type(type)
+    {
+        switch (info.type) {
+            case CUIDTX_PROCESSOR_TYPE_GPU:
+                localId = info.gpu.deviceId;
+                break;
+            case CUIDTX_PROCESSOR_TYPE_CPU:
+                localId = info.cpu.numaId;
+                break;
+            default: localId = -1; break;
+        }
+    }
+
+    TopologyNode(int rank, CUIDTXprocessorType type, int localId)
+        : rank(rank)
+        , type(type)
+        , localId(localId)
+    {
+    }
+
+    TopologyNode() : rank(-1), type(CUIDTX_PROCESSOR_TYPE_MAX), localId(-1) {}
+
+    using Pair = std::pair<TopologyNode, TopologyNode>;
+
+    bool operator<(const TopologyNode& rhs) const noexcept {
+        if (rank != rhs.rank) return rank < rhs.rank;
+        if (type != rhs.type) return type < rhs.type;
+        return localId < rhs.localId;
+    }
+
+    bool operator==(const TopologyNode& rhs) const noexcept {
+        return rank == rhs.rank && type == rhs.type && localId == rhs.localId;
+    }
+
+    bool operator!=(const TopologyNode& rhs) const noexcept {
+        return !(*this == rhs);
+    }
+};
+
+inline std::string topoNodeStr(const TopologyNode& n) {
+    if (n.type == CUIDTX_PROCESSOR_TYPE_GPU)
+        return "GPU(" + std::to_string(n.rank) + "," + std::to_string(n.localId) + ")";
+    return "CPU(" + std::to_string(n.rank) + "," + std::to_string(n.localId) + ")";
+}
+
 class Processor {
 public:
     Processor(const ProcessorInfo &info, int rank)
     : info_(info)
+    , topologyNode_(rank, info.type, info)
     {
         std::memset(&handle_, 0, sizeof(handle_));
         handle_.rank = rank;
@@ -109,6 +150,7 @@ public:
 
     CUIDTXprocessor handle_ {};
     ProcessorInfo info_ {};
+    TopologyNode topologyNode_;
 };
 
 /* ==================================================================

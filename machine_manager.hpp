@@ -8,10 +8,8 @@
 #include <utility>
 #include <memory>
 
-typedef std::pair<CUIDTXprocessor, CUIDTXprocessor> CUIDTXprocessorPair;
-
-inline CUIDTXprocessorPair canonicalPair(const CUIDTXprocessor& a,
-                                         const CUIDTXprocessor& b) {
+inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
+                                        const TopologyNode& b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
 }
 
@@ -22,17 +20,14 @@ struct MachineManager {
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
     ProcessorMap processors_;
 
-    std::map<CUIDTXprocessorPair, std::string> topology;
+    std::map<TopologyNode::Pair, std::string> topology;
 
     // Load processors from a PAL
     void loadPAL(IProcessorAbstractionLayer &pal);
 
     void buildTopology(const MachineManager& remote);
 
-    std::string query(const CUIDTXprocessor& a, const CUIDTXprocessor& b) const {
-        auto it = topology.find(canonicalPair(a, b));
-        return (it != topology.end()) ? it->second : "";
-    }
+    std::string query(const CUIDTXprocessor& a, const CUIDTXprocessor& b) const;
 
     const std::vector<std::unique_ptr<Processor>>& gpus() const {
         static const std::vector<std::unique_ptr<Processor>> empty;
