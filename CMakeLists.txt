@@ -15,7 +15,7 @@ if(NOT TARGET CUDA::nvml)
         "Ensure the CUDA Toolkit provides nvidia-ml (libnvidia-ml).")
 endif()
 
-add_executable(gpu_topo local_nvml.cpp pal.cpp)
+add_executable(gpu_topo nvml_test.cpp pal.cpp)
 
 target_link_libraries(gpu_topo PRIVATE
     MPI::MPI_CXX
