@@ -90,7 +90,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             strncpy(G.busId, allBusIds[k], BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, G.name, NAME_SZ));
 
-#ifndef PHASE3_USE_NVML
             int lcnt = 0;
             for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
                 nvmlEnableState_t st;
@@ -118,7 +117,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 pt.pcieTopo = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
                 G.nPeerTopos++;
             }
-#endif
 
             int numaVal = -1;
             if (cudaDeviceGetAttribute(&numaVal, cudaDevAttrNumaId, ci) == cudaSuccess

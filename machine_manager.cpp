@@ -9,9 +9,6 @@
 #include <algorithm>
 #include <cassert>
 
-#ifdef PHASE3_USE_NVML
-#include <nvml.h>
-#endif
 
 void MachineManager::loadPAL(IProcessorAbstractionLayer &pal) 
 {
@@ -43,32 +40,9 @@ static const char* topoTag(int t) {
 
 static std::vector<std::string> getNvLinkPeers(const GpuInfo& gi) {
     std::vector<std::string> peers;
-#ifdef PHASE3_USE_NVML
-    nvmlDevice_t dev;
-    if (nvmlDeviceGetHandleByPciBusId_v2(gi.busId, &dev) != NVML_SUCCESS) {
-        printf("    [getNvLinkPeers] requested busId=%s → NOT FOUND locally\n", gi.busId);
-        return peers;
-    }
-    char actualUuid[96] = {};
-    nvmlPciInfo_t actualPci;
-    nvmlDeviceGetUUID(dev, actualUuid, sizeof(actualUuid));
-    nvmlDeviceGetPciInfo_v3(dev, &actualPci);
-    printf("    [getNvLinkPeers] requested busId=%s → resolved to local device uuid=%s pci=%s\n",
-           gi.busId, actualUuid, actualPci.busId);
-    for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
-        nvmlEnableState_t st;
-        if (nvmlDeviceGetNvLinkState(dev, l, &st) != NVML_SUCCESS) break;
-        if (st != NVML_FEATURE_ENABLED) continue;
-        nvmlPciInfo_t rp;
-        if (nvmlDeviceGetNvLinkRemotePciInfo_v2(dev, l, &rp) != NVML_SUCCESS) continue;
-        peers.emplace_back(rp.busId);
-    }
-    printf("    [getNvLinkPeers]   → %zu NVLink peers found\n", peers.size());
-#else
     for (int k = 0; k < gi.nNvLinks; k++)
         if (gi.nvLinks[k].active)
             peers.emplace_back(gi.nvLinks[k].remoteBusId);
-#endif
     return peers;
 }
 
@@ -104,21 +78,7 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
     return n;
 }
 
-#ifdef PHASE3_USE_NVML
-static int queryPcieTopo(const char* busIdA, const char* busIdB) {
-    nvmlDevice_t a, b;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busIdB, &b) != NVML_SUCCESS) return -1;
-    nvmlGpuTopologyLevel_t lvl;
-    if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
-    return (int)lvl;
-}
-#endif
-
 static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
-#ifdef PHASE3_USE_NVML
-    return topoTag(queryPcieTopo(gi.busId, gj.busId));
-#else
     int pt = -1;
     for (int k = 0; k < gi.nPeerTopos && pt < 0; k++)
         if (sameBus(gi.peerTopos[k].busId, gj.busId))
@@ -127,7 +87,6 @@ static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
         if (sameBus(gj.peerTopos[k].busId, gi.busId))
             pt = gj.peerTopos[k].pcieTopo;
     return topoTag(pt);
-#endif
 }
 
 // Resolution order matters: NVLink/NVSwitch checks must run before the
@@ -357,11 +316,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     printf("                    GLOBAL TOPOLOGY REPORT\n");
     printf("=========================================================================\n");
     printf("  %d rank(s),  %d GPU(s),  %d CPU NUMA node(s)\n", ws, nGpus, nCpus);
-#ifdef PHASE3_USE_NVML
-    printf("  (mode: NVML live query)\n");
-#else
     printf("  (mode: pre-collected data only)\n");
-#endif
 
     /* ---- Per-Rank Assignment ---- */
     printf("\n--- Per-Rank Assignment ---\n\n");

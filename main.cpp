@@ -3,8 +3,9 @@
  *
  * Phase 1A: GPU collection  (CudaPAL – NVML + CUDA)
  * Phase 1B: CPU collection  (CPUPAL  – hwloc, NUMA granularity)
- * Phase 2:  MPI_Allgather exchange
- * Phase 3:  Build per-rank topology maps
+ * Phase 1C: Build intra-rank topology (local, parallel across ranks)
+ * Phase 2:  MPI_Allgather exchange (processors + local topology)
+ * Phase 3:  Build cross-rank topology (rank 0 only)
  * Phase 4:  Print global topology
  *
  * Build (with cmake):
@@ -24,27 +25,28 @@
 #include <unistd.h>
 
 #include <mpi.h>
-#include <nvml.h>
 
 static int gRank = 0;
 
-#ifdef PHASE3_USE_NVML
-#define CHK_NVML(call) do {                                        \
-    nvmlReturn_t r_ = (call);                                      \
-    if (r_ != NVML_SUCCESS) {                                      \
-        fprintf(stderr, "[R%d] NVML %s:%d – %s\n",                \
-                gRank, __FILE__, __LINE__, nvmlErrorString(r_));   \
-        MPI_Abort(MPI_COMM_WORLD, 1);                              \
-    }                                                              \
-} while (0)
-#endif
-
 /* POD wire format for MPI_Allgather */
+
+static constexpr int MAX_TOPO_PAIRS = 512; // C(MAX_TOPO_NODES, 2) = 496 rounded up
+
+struct TopoEntryWire {
+    uint8_t srcType;
+    int     srcLocalId;
+    uint8_t dstType;
+    int     dstLocalId;
+    char    connType[8];
+};
+
 struct RankDataWire {
     char          hostname[HOST_SZ];
     int           rank;
     int           nNodes;
     ProcessorInfo nodes[MAX_TOPO_NODES];
+    int           nTopoEntries;
+    TopoEntryWire topoEntries[MAX_TOPO_PAIRS];
 };
 
 static void packToWire(const MachineManager& M, RankDataWire& w) {
@@ -60,6 +62,17 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
         w.nodes[w.nNodes++] = p->info_;
     }
+    w.nTopoEntries = 0;
+    for (auto& [pair, conn] : M.topology) {
+        if (w.nTopoEntries >= MAX_TOPO_PAIRS) break;
+        auto& e = w.topoEntries[w.nTopoEntries];
+        e.srcType    = pair.first.type;
+        e.srcLocalId = pair.first.localId;
+        e.dstType    = pair.second.type;
+        e.dstLocalId = pair.second.localId;
+        strncpy(e.connType, conn.c_str(), sizeof(e.connType) - 1);
+        w.nTopoEntries++;
+    }
 }
 
 static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
@@ -70,6 +83,13 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
     for (int i = 0; i < w.nNodes; i++) {
         M.processors_[w.nodes[i].type].emplace_back(
             std::make_unique<Processor>(w.nodes[i], w.rank));
+    }
+    M.topology.clear();
+    for (int i = 0; i < w.nTopoEntries; i++) {
+        auto& e = w.topoEntries[i];
+        TopologyNode src(w.rank, (CUIDTXprocessorType)e.srcType, e.srcLocalId);
+        TopologyNode dst(w.rank, (CUIDTXprocessorType)e.dstType, e.dstLocalId);
+        M.topology[canonicalPair(src, dst)] = e.connType;
     }
 }
 
@@ -123,8 +143,16 @@ int main(int argc, char** argv) {
         CPUPAL cpuPal;
         local.loadPAL(cpuPal);
     }
-    fprintf(stderr, "[R%d@%s] Phase 1B done, %d CPUs. Entering barrier...\n",
+    fprintf(stderr, "[R%d@%s] Phase 1B done, %d CPUs\n",
             gRank, local.hostname, (int)local.cpus().size());
+    fflush(stderr);
+
+    /* Phase 1C – local topology (intra-rank, parallel across all ranks) */
+    if (gRank == 0)
+        printf("[Phase 1C] Building local topology ...\n");
+    local.buildTopology(local);
+    fprintf(stderr, "[R%d@%s] Phase 1C done, %zu local topology entries. Entering barrier...\n",
+            gRank, local.hostname, local.topology.size());
     fflush(stderr);
     MPI_Barrier(MPI_COMM_WORLD);
     fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, local.hostname);
@@ -138,19 +166,15 @@ int main(int argc, char** argv) {
     std::vector<MachineManager> managers;
     exchangeRankData(local, managers);
 
-    /* Phase 3 – build topology per rank */
-    if (gRank == 0)
-        printf("[Phase 3] Building topology maps ...\n");
-
-#ifdef PHASE3_USE_NVML
-    CHK_NVML(nvmlInit_v2());
-#endif
-    for (int r = 0; r < ws; r++)
-        for (int d = 0; d < ws; d++)
-            managers[r].buildTopology(managers[d]);
-#ifdef PHASE3_USE_NVML
-    CHK_NVML(nvmlShutdown());
-#endif
+    /* Phase 3 – build cross-rank topology (rank 0 only;
+       intra-rank topology already populated from Phase 1C via wire exchange) */
+    if (gRank == 0) {
+        printf("[Phase 3] Building cross-rank topology maps ...\n");
+        for (int r = 0; r < ws; r++)
+            for (int d = 0; d < ws; d++)
+                if (r != d)
+                    managers[r].buildTopology(managers[d]);
+    }
 
     /* Phase 4 – print */
     if (gRank == 0) {
