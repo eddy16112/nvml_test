@@ -87,6 +87,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             strncpy(G.busId, allBusIds[k], BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, G.name, NAME_SZ));
 
+#ifndef PHASE3_USE_NVML
             int lcnt = 0;
             for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
                 nvmlEnableState_t st;
@@ -104,7 +105,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             }
             G.nNvLinks = lcnt;
 
-#ifndef PHASE3_USE_NVML
             G.nPeerTopos = 0;
             for (int p = 0; p < nAll; p++) {
                 if (p == k) continue;

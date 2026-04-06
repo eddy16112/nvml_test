@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-//#define PHASE3_USE_NVML
+#define PHASE3_USE_NVML
 
 static constexpr int MAX_GPUS       = 16;
 static constexpr int MAX_NUMAS      = 16;
@@ -21,12 +21,12 @@ static constexpr int HOST_SZ        = 256;
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
 
+#ifndef PHASE3_USE_NVML
 struct NvLinkPeer {
     char remoteBusId[BUSID_SZ];
     int  active;
 };
 
-#ifndef PHASE3_USE_NVML
 struct PeerTopo {
     char busId[BUSID_SZ];
     int  pcieTopo;
@@ -39,9 +39,9 @@ struct GpuInfo {
     char     busId[BUSID_SZ];
     char     name[NAME_SZ];
     int      numaId;
+#ifndef PHASE3_USE_NVML
     int      nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
-#ifndef PHASE3_USE_NVML
     int      nPeerTopos;
     PeerTopo peerTopos[MAX_GPUS];
 #endif

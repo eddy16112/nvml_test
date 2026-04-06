@@ -41,6 +41,67 @@ static const char* topoTag(int t) {
     }
 }
 
+#ifdef PHASE3_USE_NVML
+
+static std::vector<std::string> queryNvLinkPeers(const char* busId) {
+    std::vector<std::string> peers;
+    nvmlDevice_t dev;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busId, &dev) != NVML_SUCCESS)
+        return peers;
+    for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
+        nvmlEnableState_t st;
+        if (nvmlDeviceGetNvLinkState(dev, l, &st) != NVML_SUCCESS) break;
+        if (st != NVML_FEATURE_ENABLED) continue;
+        nvmlPciInfo_t rp;
+        if (nvmlDeviceGetNvLinkRemotePciInfo_v2(dev, l, &rp) != NVML_SUCCESS) continue;
+        peers.emplace_back(rp.busId);
+    }
+    return peers;
+}
+
+static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
+    int n = 0;
+    for (auto& remote : queryNvLinkPeers(gi.busId))
+        if (sameBus(remote.c_str(), peerBusId)) n++;
+    return n;
+}
+
+static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
+                              const MachineManager& srcMgr,
+                              const MachineManager& dstMgr) {
+    auto isKnownGpu = [&](const char* bid) -> bool {
+        for (auto& p : srcMgr.gpus())
+            if (sameBus(bid, p->info_.gpu.busId)) return true;
+        for (auto& p : dstMgr.gpus())
+            if (sameBus(bid, p->info_.gpu.busId)) return true;
+        return false;
+    };
+
+    std::map<std::string, int> swI, swJ;
+    for (auto& remote : queryNvLinkPeers(gi.busId))
+        if (!isKnownGpu(remote.c_str()))
+            swI[busKey(remote.c_str())]++;
+    for (auto& remote : queryNvLinkPeers(gj.busId))
+        if (!isKnownGpu(remote.c_str()))
+            swJ[busKey(remote.c_str())]++;
+
+    int n = 0;
+    for (auto& kv : swI)
+        if (swJ.count(kv.first)) n += kv.second;
+    return n;
+}
+
+static int queryPcieTopo(const char* busIdA, const char* busIdB) {
+    nvmlDevice_t a, b;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
+    if (nvmlDeviceGetHandleByPciBusId_v2(busIdB, &b) != NVML_SUCCESS) return -1;
+    nvmlGpuTopologyLevel_t lvl;
+    if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
+    return (int)lvl;
+}
+
+#else
+
 static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
     int n = 0;
     for (int k = 0; k < gi.nNvLinks; k++)
@@ -74,15 +135,6 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
     return n;
 }
 
-#ifdef PHASE3_USE_NVML
-static int queryPcieTopo(const char* busIdA, const char* busIdB) {
-    nvmlDevice_t a, b;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busIdB, &b) != NVML_SUCCESS) return -1;
-    nvmlGpuTopologyLevel_t lvl;
-    if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
-    return (int)lvl;
-}
 #endif
 
 static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
