@@ -41,13 +41,20 @@ static const char* topoTag(int t) {
     }
 }
 
-#ifdef PHASE3_USE_NVML
-
-static std::vector<std::string> queryNvLinkPeers(const char* busId) {
+static std::vector<std::string> getNvLinkPeers(const GpuInfo& gi) {
     std::vector<std::string> peers;
+#ifdef PHASE3_USE_NVML
     nvmlDevice_t dev;
-    if (nvmlDeviceGetHandleByPciBusId_v2(busId, &dev) != NVML_SUCCESS)
+    if (nvmlDeviceGetHandleByPciBusId_v2(gi.busId, &dev) != NVML_SUCCESS) {
+        printf("    [getNvLinkPeers] requested busId=%s → NOT FOUND locally\n", gi.busId);
         return peers;
+    }
+    char actualUuid[96] = {};
+    nvmlPciInfo_t actualPci;
+    nvmlDeviceGetUUID(dev, actualUuid, sizeof(actualUuid));
+    nvmlDeviceGetPciInfo_v3(dev, &actualPci);
+    printf("    [getNvLinkPeers] requested busId=%s → resolved to local device uuid=%s pci=%s\n",
+           gi.busId, actualUuid, actualPci.busId);
     for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
         nvmlEnableState_t st;
         if (nvmlDeviceGetNvLinkState(dev, l, &st) != NVML_SUCCESS) break;
@@ -56,12 +63,18 @@ static std::vector<std::string> queryNvLinkPeers(const char* busId) {
         if (nvmlDeviceGetNvLinkRemotePciInfo_v2(dev, l, &rp) != NVML_SUCCESS) continue;
         peers.emplace_back(rp.busId);
     }
+    printf("    [getNvLinkPeers]   → %zu NVLink peers found\n", peers.size());
+#else
+    for (int k = 0; k < gi.nNvLinks; k++)
+        if (gi.nvLinks[k].active)
+            peers.emplace_back(gi.nvLinks[k].remoteBusId);
+#endif
     return peers;
 }
 
 static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
     int n = 0;
-    for (auto& remote : queryNvLinkPeers(gi.busId))
+    for (auto& remote : getNvLinkPeers(gi))
         if (sameBus(remote.c_str(), peerBusId)) n++;
     return n;
 }
@@ -78,10 +91,10 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
     };
 
     std::map<std::string, int> swI, swJ;
-    for (auto& remote : queryNvLinkPeers(gi.busId))
+    for (auto& remote : getNvLinkPeers(gi))
         if (!isKnownGpu(remote.c_str()))
             swI[busKey(remote.c_str())]++;
-    for (auto& remote : queryNvLinkPeers(gj.busId))
+    for (auto& remote : getNvLinkPeers(gj))
         if (!isKnownGpu(remote.c_str()))
             swJ[busKey(remote.c_str())]++;
 
@@ -91,6 +104,7 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
     return n;
 }
 
+#ifdef PHASE3_USE_NVML
 static int queryPcieTopo(const char* busIdA, const char* busIdB) {
     nvmlDevice_t a, b;
     if (nvmlDeviceGetHandleByPciBusId_v2(busIdA, &a) != NVML_SUCCESS) return -1;
@@ -99,42 +113,6 @@ static int queryPcieTopo(const char* busIdA, const char* busIdB) {
     if (nvmlDeviceGetTopologyCommonAncestor(a, b, &lvl) != NVML_SUCCESS) return -1;
     return (int)lvl;
 }
-
-#else
-
-static int countNvLinksByBusId(const GpuInfo& gi, const char* peerBusId) {
-    int n = 0;
-    for (int k = 0; k < gi.nNvLinks; k++)
-        if (gi.nvLinks[k].active && sameBus(gi.nvLinks[k].remoteBusId, peerBusId))
-            n++;
-    return n;
-}
-
-static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
-                              const MachineManager& srcMgr,
-                              const MachineManager& dstMgr) {
-    auto isKnownGpu = [&](const char* bid) -> bool {
-        for (auto& p : srcMgr.gpus())
-            if (sameBus(bid, p->info_.gpu.busId)) return true;
-        for (auto& p : dstMgr.gpus())
-            if (sameBus(bid, p->info_.gpu.busId)) return true;
-        return false;
-    };
-
-    std::map<std::string, int> swI, swJ;
-    for (int k = 0; k < gi.nNvLinks; k++)
-        if (gi.nvLinks[k].active && !isKnownGpu(gi.nvLinks[k].remoteBusId))
-            swI[busKey(gi.nvLinks[k].remoteBusId)]++;
-    for (int k = 0; k < gj.nNvLinks; k++)
-        if (gj.nvLinks[k].active && !isKnownGpu(gj.nvLinks[k].remoteBusId))
-            swJ[busKey(gj.nvLinks[k].remoteBusId)]++;
-
-    int n = 0;
-    for (auto& kv : swI)
-        if (swJ.count(kv.first)) n += kv.second;
-    return n;
-}
-
 #endif
 
 static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
@@ -152,26 +130,46 @@ static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
 #endif
 }
 
+// Resolution order matters: NVLink/NVSwitch checks must run before the
+// cross-node fallback because systems like NVL72 can have NVLink and
+// NVSwitch connections that span across nodes.
+//
+//  1. Same PCI bus (same GPU, same node only)        → X
+//  2. Direct NVLink between the two GPUs             → NVx
+//  3. Indirect NVLink via NVSwitch                   → NVx
+//  4. Cross-node with no NVLink/NVSwitch             → NET
+//  5. Same node, PCIe topology                       → PIX/PXB/PHB/NODE/SYS
 static std::string resolveGpuGpu(
         const GpuInfo& gi, const GpuInfo& gj,
         bool sameNode,
         const MachineManager& srcMgr, const MachineManager& dstMgr) {
 
+    printf("  [resolveGpuGpu] src=%s (uuid=%.40s) ↔ dst=%s (uuid=%.40s) sameNode=%d\n",
+           gi.busId, gi.uuid, gj.busId, gj.uuid, sameNode);
+
     if (sameNode && sameBus(gi.busId, gj.busId))
         return "X";
 
     int nvl = countNvLinksByBusId(gi, gj.busId);
-    if (nvl > 0)
+    if (nvl > 0) {
+        printf("    → direct NVLink = %d\n", nvl);
         return "NV" + std::to_string(nvl);
+    }
 
     int nvs = countNvSwitchLinks(gi, gj, srcMgr, dstMgr);
-    if (nvs > 0)
+    if (nvs > 0) {
+        printf("    → NVSwitch = %d\n", nvs);
         return "NV" + std::to_string(nvs);
+    }
 
-    if (!sameNode)
+    if (!sameNode) {
+        printf("    → NET (cross-node, no NVLink/NVSwitch)\n");
         return "NET";
+    }
 
-    return resolvePcie(gi, gj);
+    std::string pcie = resolvePcie(gi, gj);
+    printf("    → PCIe = %s\n", pcie.c_str());
+    return pcie;
 }
 
 static std::string resolveGpuCpu(const GpuInfo& g, const CpuInfo& c,

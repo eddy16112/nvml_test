@@ -104,12 +104,17 @@ int main(int argc, char** argv) {
     gethostname(local.hostname, HOST_SZ);
 
     /* Phase 1A – GPU */
+    fprintf(stderr, "[R%d@%s] Phase 1A start\n", gRank, local.hostname);
+    fflush(stderr);
     if (gRank == 0)
         printf("[Phase 1A] Collecting local GPU data (CudaPAL) ...\n");
     {
         CudaPAL gpuPal;
         local.loadPAL(gpuPal);
     }
+    fprintf(stderr, "[R%d@%s] Phase 1A done, %d GPUs\n",
+            gRank, local.hostname, (int)local.gpus().size());
+    fflush(stderr);
 
     /* Phase 1B – CPU */
     if (gRank == 0)
@@ -118,7 +123,12 @@ int main(int argc, char** argv) {
         CPUPAL cpuPal;
         local.loadPAL(cpuPal);
     }
+    fprintf(stderr, "[R%d@%s] Phase 1B done, %d CPUs. Entering barrier...\n",
+            gRank, local.hostname, (int)local.cpus().size());
+    fflush(stderr);
     MPI_Barrier(MPI_COMM_WORLD);
+    fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, local.hostname);
+    fflush(stderr);
 
     /* Phase 2 */
     if (gRank == 0)

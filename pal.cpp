@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 
+#include <mpi.h>
 #include <nvml.h>
 #include <cuda_runtime.h>
 #include <hwloc.h>
@@ -14,7 +15,8 @@
     if (e_ != cudaSuccess) {                                       \
         fprintf(stderr, "CUDA %s:%d – %s\n",                      \
                 __FILE__, __LINE__, cudaGetErrorString(e_));       \
-        std::exit(1);                                              \
+        fflush(stderr);                                            \
+        MPI_Abort(MPI_COMM_WORLD, 1);                              \
     }                                                              \
 } while (0)
 
@@ -23,7 +25,8 @@
     if (r_ != NVML_SUCCESS) {                                      \
         fprintf(stderr, "NVML %s:%d – %s\n",                      \
                 __FILE__, __LINE__, nvmlErrorString(r_));          \
-        std::exit(1);                                              \
+        fflush(stderr);                                            \
+        MPI_Abort(MPI_COMM_WORLD, 1);                              \
     }                                                              \
 } while (0)
 
