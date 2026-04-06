@@ -46,6 +46,29 @@ static std::string cudaUuidToStr(const cudaUUID_t& u) {
     return buf;
 }
 
+/** NVML bitmask of NUMA nodes; use lowest set bit as canonical node id. */
+static int nvmlGpuNumaId(nvmlDevice_t hDev) {
+    unsigned long nodeSet[4] = {};
+    const unsigned int nwords = (unsigned int)(sizeof(nodeSet) / sizeof(nodeSet[0]));
+    nvmlReturn_t r = nvmlDeviceGetMemoryAffinity(hDev, nwords, nodeSet,
+                                               NVML_AFFINITY_SCOPE_NODE);
+    if (r != NVML_SUCCESS)
+        return -1;
+    for (unsigned int w = 0; w < nwords; w++) {
+        unsigned long m = nodeSet[w];
+        if (m) {
+#if defined(__GNUC__) || defined(__clang__)
+            return (int)__builtin_ctzl(m) + (int)(w * (sizeof(unsigned long) * 8));
+#else
+            for (int b = 0; b < (int)(sizeof(unsigned long) * 8); b++)
+                if (m & (1UL << b))
+                    return (int)(b + w * (sizeof(unsigned long) * 8));
+#endif
+        }
+    }
+    return -1;
+}
+
 std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     std::vector<ProcessorInfo> result;
 
@@ -120,8 +143,13 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
             int numaVal = -1;
             if (cudaDeviceGetAttribute(&numaVal, cudaDevAttrNumaId, ci) == cudaSuccess
-                && numaVal >= 0)
+                && numaVal >= 0) {
                 G.numaId = numaVal;
+            } else {
+                int nml = nvmlGpuNumaId(hDev);
+                if (nml >= 0)
+                    G.numaId = nml;
+            }
 
             break;
         }
