@@ -77,9 +77,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
         cudaDeviceProp prop;
         PAL_CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
-        G.ccMajor = prop.major;
-        G.ccMinor = prop.minor;
-
         std::string cudaUuid = cudaUuidToStr(prop.uuid);
 
         for (int k = 0; k < nAll; k++) {
@@ -89,17 +86,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             strncpy(G.uuid, allUuids[k], UUID_SZ - 1);
             strncpy(G.busId, allBusIds[k], BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, G.name, NAME_SZ));
-
-            nvmlMemory_t mem;
-            PAL_CHK_NVML(nvmlDeviceGetMemoryInfo(hDev, &mem));
-            G.memMB = mem.total / (1024ULL * 1024);
-
-            unsigned int v = 0;
-            if (nvmlDeviceGetCurrPcieLinkGeneration(hDev, &v) == NVML_SUCCESS)
-                G.pcieGen = (int)v;
-            v = 0;
-            if (nvmlDeviceGetCurrPcieLinkWidth(hDev, &v) == NVML_SUCCESS)
-                G.pcieWidth = (int)v;
 
             int lcnt = 0;
             for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {

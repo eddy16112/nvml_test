@@ -221,9 +221,6 @@ struct GNode {
     TopologyNode tnode;
     std::string host;
     std::string uuid, busId, name;
-    int ccMajor = 0, ccMinor = 0;
-    uint64_t memMB = 0;
-    int pcieGen = 0, pcieWidth = 0;
     int numaId = -1;
     std::vector<int> ownerRanks;
 
@@ -255,11 +252,6 @@ void printTopology(const std::vector<MachineManager>& managers) {
                     gn.uuid    = gi.uuid;
                     gn.busId   = gi.busId;
                     gn.name    = gi.name;
-                    gn.ccMajor = gi.ccMajor;
-                    gn.ccMinor = gi.ccMinor;
-                    gn.memMB   = gi.memMB;
-                    gn.pcieGen = gi.pcieGen;
-                    gn.pcieWidth = gi.pcieWidth;
                     gn.numaId  = gi.numaId;
                 } else {
                     const CpuInfo& ci = np->info_.cpu;
@@ -331,12 +323,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
         for (auto& p : M.gpus()) {
             std::string hl = handleStr(p->handle_);
             const GpuInfo& gi = p->info_.gpu;
-            printf("    %-12s  %s [%s] %lu MB PCIe-Gen%d x%d",
-                   hl.c_str(), gi.busId, gi.name,
-                   (unsigned long)gi.memMB,
-                   gi.pcieGen, gi.pcieWidth);
-            if (gi.ccMajor)
-                printf(" CC %d.%d", gi.ccMajor, gi.ccMinor);
+            printf("    %-12s  %s [%s]",
+                   hl.c_str(), gi.busId, gi.name);
             if (gi.numaId >= 0)
                 printf(" NUMA:%d", gi.numaId);
             printf("\n");
@@ -354,10 +342,9 @@ void printTopology(const std::vector<MachineManager>& managers) {
         const GNode& g = G[i];
         std::string label = topoNodeStr(g.tnode);
         if (g.isGpu()) {
-            printf("  %-12s  %-16s  %-24s  %-16s  %5lu MB",
+            printf("  %-12s  %-16s  %-24s  %-16s",
                    label.c_str(), g.busId.c_str(), g.name.c_str(),
-                   g.host.c_str(), (unsigned long)g.memMB);
-            if (g.ccMajor) printf("  CC%d.%d", g.ccMajor, g.ccMinor);
+                   g.host.c_str());
             if (g.numaId >= 0) printf("  NUMA:%d", g.numaId);
         } else {
             printf("  %-12s  %-16s  %-24s  %-16s  NUMA %d",

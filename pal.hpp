@@ -38,9 +38,6 @@ struct GpuInfo {
     char     uuid[UUID_SZ];
     char     busId[BUSID_SZ];
     char     name[NAME_SZ];
-    int      ccMajor, ccMinor;
-    uint64_t memMB;
-    int      pcieGen, pcieWidth;
     int      numaId;
     int      nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
