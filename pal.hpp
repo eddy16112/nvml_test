@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda.h>
+
 #include <cstdint>
 #include <cstring>
 #include <cctype>
@@ -30,14 +32,14 @@ struct PCIEPeer {
 };
 
 struct GPUInfo {
-    int      deviceId;
-    char     uuid[UUID_SZ];
-    char     busId[BUSID_SZ];
-    char     name[NAME_SZ];
-    int      nNvLinks;
+    CUdevice   deviceId;
+    char       uuid[UUID_SZ];
+    char       busId[BUSID_SZ];
+    char       name[NAME_SZ];
+    int32_t    nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
-    int      nPcies;
-    PCIEPeer pcies[MAX_GPUS];
+    int32_t    nPcies;
+    PCIEPeer   pcies[MAX_GPUS];
 };
 
 struct CPUInfo {
@@ -81,7 +83,7 @@ struct TopologyNode
     {
         switch (info.type) {
             case CUIDTX_PROCESSOR_TYPE_GPU:
-                localId = info.gpu.deviceId;
+                localId = static_cast<int>(info.gpu.deviceId);
                 break;
             case CUIDTX_PROCESSOR_TYPE_CPU:
                 localId = info.numaId;
@@ -132,7 +134,9 @@ public:
         handle_.rank = rank;
         handle_.type = info.type;
         switch (info.type) {
-            case CUIDTX_PROCESSOR_TYPE_GPU: handle_.gpu.deviceId = info.gpu.deviceId; break;
+            case CUIDTX_PROCESSOR_TYPE_GPU:
+                handle_.gpu.deviceId = static_cast<int>(info.gpu.deviceId);
+                break;
             case CUIDTX_PROCESSOR_TYPE_CPU: handle_.cpu.cpuOrdinal = info.cpu.cpuOrdinal; break;
             default: break;
         }

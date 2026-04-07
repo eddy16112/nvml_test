@@ -15,11 +15,17 @@ if(NOT TARGET CUDA::nvml)
         "Ensure the CUDA Toolkit provides nvidia-ml (libnvidia-ml).")
 endif()
 
+if(NOT TARGET CUDA::cuda_driver)
+    message(FATAL_ERROR
+        "CUDAToolkit found but CUDA::cuda_driver target is missing.\n"
+        "cuDeviceGet / cuInit require libcuda (driver API).")
+endif()
+
 add_executable(gpu_topo main.cpp machine_manager.cpp pal.cpp)
 
 target_link_libraries(gpu_topo PRIVATE
     MPI::MPI_CXX
-    CUDA::cudart
+    CUDA::cuda_driver
     CUDA::nvml
     PkgConfig::HWLOC
 )

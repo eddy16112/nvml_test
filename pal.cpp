@@ -7,18 +7,7 @@
 
 #include <mpi.h>
 #include <nvml.h>
-#include <cuda_runtime.h>
 #include <hwloc.h>
-
-#define PAL_CHK_CUDA(call) do {                                    \
-    cudaError_t e_ = (call);                                       \
-    if (e_ != cudaSuccess) {                                       \
-        fprintf(stderr, "CUDA %s:%d – %s\n",                      \
-                __FILE__, __LINE__, cudaGetErrorString(e_));       \
-        fflush(stderr);                                            \
-        MPI_Abort(MPI_COMM_WORLD, 1);                              \
-    }                                                              \
-} while (0)
 
 #define PAL_CHK_NVML(call) do {                                    \
     nvmlReturn_t r_ = (call);                                      \
@@ -30,15 +19,27 @@
     }                                                              \
 } while (0)
 
+#define PAL_CHK_CU(call) do {                                      \
+    CUresult cu_ = (call);                                         \
+    if (cu_ != CUDA_SUCCESS) {                                     \
+        const char* cuMsg = nullptr;                               \
+        cuGetErrorString(cu_, &cuMsg);                             \
+        fprintf(stderr, "CUDA driver %s:%d – %s\n",                \
+                __FILE__, __LINE__, cuMsg ? cuMsg : "(no message)"); \
+        fflush(stderr);                                            \
+        MPI_Abort(MPI_COMM_WORLD, 1);                              \
+    }                                                              \
+} while (0)
+
 /* ==================================================================
  *  CudaPAL – GPU collection via NVML + CUDA
  * ================================================================== */
 
 CudaPAL::~CudaPAL() = default;
 
-static std::string cudaUuidToStr(const cudaUUID_t& u) {
+static std::string cuUuidToStr(const CUuuid& u) {
     char buf[80];
-    const unsigned char* b = (const unsigned char*)u.bytes;
+    const unsigned char* b = reinterpret_cast<const unsigned char*>(u.bytes);
     snprintf(buf, sizeof(buf),
         "GPU-%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
         b[0],b[1],b[2],b[3], b[4],b[5], b[6],b[7],
@@ -89,22 +90,26 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         PAL_CHK_NVML(nvmlDeviceGetUUID(hAll[i], allUuids[i], UUID_SZ));
     }
 
-    int nCuda = 0;
-    PAL_CHK_CUDA(cudaGetDeviceCount(&nCuda));
-    int nGpus = std::min(nCuda, MAX_GPUS);
+    PAL_CHK_CU(cuInit(0));
+
+    int devCount = 0;
+    PAL_CHK_CU(cuDeviceGetCount(&devCount));
+    int nGpus = std::min(devCount, MAX_GPUS);
 
     for (int ci = 0; ci < nGpus; ci++) {
         ProcessorInfo info{};
         info.type = CUIDTX_PROCESSOR_TYPE_GPU;
         info.numaId = -1;
         GPUInfo& gpuInfo = info.gpu;
-        gpuInfo.deviceId = ci;
+        CUdevice cuDevice{};
+        PAL_CHK_CU(cuDeviceGet(&cuDevice, ci));
+        gpuInfo.deviceId = cuDevice;
         gpuInfo.nNvLinks = 0;
         gpuInfo.nPcies = 0;
 
-        cudaDeviceProp prop;
-        PAL_CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
-        std::string cudaUuid = cudaUuidToStr(prop.uuid);
+        CUuuid cuUuid{};
+        PAL_CHK_CU(cuDeviceGetUuid_v2(&cuUuid, cuDevice));
+        std::string cudaUuid = cuUuidToStr(cuUuid);
 
         for (int k = 0; k < nAll; k++) {
             if (cudaUuid != allUuids[k]) continue;
@@ -144,8 +149,9 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             }
 
             int numaVal = -1;
-            if (cudaDeviceGetAttribute(&numaVal, cudaDevAttrNumaId, ci) == cudaSuccess
-                && numaVal >= 0) {
+            CUresult numaRes = cuDeviceGetAttribute(
+                &numaVal, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cuDevice);
+            if (numaRes == CUDA_SUCCESS && numaVal >= 0) {
                 info.numaId = numaVal;
             } else {
                 int nml = nvmlGpuNumaId(hDev);
