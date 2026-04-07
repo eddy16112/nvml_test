@@ -45,31 +45,41 @@ static std::vector<std::string> getNvLinkPeers(const GPUInfo& gi) {
     return peers;
 }
 
-static int countNvLinksByBusId(const GPUInfo& gi, const char* peerBusId) {
+// NVLink peers are always local devices. A direct GPU-to-GPU NVLink
+// can only exist on the same node, so skip the search for cross-node pairs.
+static int countNvLinksByBusId(const GPUInfo& gi, const char* peerBusId,
+                               bool sameNode) {
+    if (!sameNode) return 0;
     int n = 0;
     for (auto& remote : getNvLinkPeers(gi))
         if (sameBus(remote.c_str(), peerBusId)) n++;
     return n;
 }
 
+// NVLink peers are local devices. To tell GPUs from NVSwitches we only
+// compare against GPUs on the SAME node (identified by hostname), avoiding
+// false matches when different nodes have identical bus IDs.
+// NVSwitch bus ID keys are prefixed with hostname so that identically-
+// addressed NVSwitch ASICs on different nodes are treated as distinct.
 static int countNvSwitchLinks(const GPUInfo& gi, const GPUInfo& gj,
                               const MachineManager& srcMgr,
                               const MachineManager& dstMgr) {
-    auto isKnownGpu = [&](const char* bid) -> bool {
-        for (auto& p : srcMgr.gpus())
-            if (sameBus(bid, p->info_.gpu.busId)) return true;
-        for (auto& p : dstMgr.gpus())
+    auto isGpuOnMgr = [](const char* bid, const MachineManager& mgr) -> bool {
+        for (auto& p : mgr.gpus())
             if (sameBus(bid, p->info_.gpu.busId)) return true;
         return false;
     };
 
+    std::string srcHost(srcMgr.hostname);
+    std::string dstHost(dstMgr.hostname);
+
     std::map<std::string, int> swI, swJ;
     for (auto& remote : getNvLinkPeers(gi))
-        if (!isKnownGpu(remote.c_str()))
-            swI[busKey(remote.c_str())]++;
+        if (!isGpuOnMgr(remote.c_str(), srcMgr))
+            swI[srcHost + ":" + busKey(remote.c_str())]++;
     for (auto& remote : getNvLinkPeers(gj))
-        if (!isKnownGpu(remote.c_str()))
-            swJ[busKey(remote.c_str())]++;
+        if (!isGpuOnMgr(remote.c_str(), dstMgr))
+            swJ[dstHost + ":" + busKey(remote.c_str())]++;
 
     int n = 0;
     for (auto& kv : swI)
@@ -108,7 +118,7 @@ static std::string resolveGpuGpu(
     if (sameNode && sameBus(gi.busId, gj.busId))
         return "X";
 
-    int nvl = countNvLinksByBusId(gi, gj.busId);
+    int nvl = countNvLinksByBusId(gi, gj.busId, sameNode);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
         return "NV" + std::to_string(nvl);
