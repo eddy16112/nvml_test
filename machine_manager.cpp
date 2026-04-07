@@ -139,11 +139,12 @@ static std::string resolveGpuGpu(
     return pcie;
 }
 
-static std::string resolveGpuCpu(int gpuNumaId, int cpuNumaId, bool sameNode) {
+static std::string resolveGpuCpu(int gpuNumaId, int cpuNumaId,
+                                 bool sameNode, bool gpuHasC2C) {
     if (!sameNode)
         return "NET";
     if (gpuNumaId >= 0 && gpuNumaId == cpuNumaId)
-        return "NODE";
+        return gpuHasC2C ? "C2C" : "NODE";
     return "SYS";
 }
 
@@ -167,10 +168,12 @@ static std::string resolveNodeConnection(
         return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, srcMgr, dstMgr);
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
-        return resolveGpuCpu(src.info_.numaId, dst.info_.numaId, sameNode);
+        return resolveGpuCpu(src.info_.numaId, dst.info_.numaId, sameNode,
+                             src.info_.gpu.hasC2C);
 
     if (st == CUIDTX_PROCESSOR_TYPE_CPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuCpu(dst.info_.numaId, src.info_.numaId, sameNode);
+        return resolveGpuCpu(dst.info_.numaId, src.info_.numaId, sameNode,
+                             dst.info_.gpu.hasC2C);
 
     return resolveCpuCpu(src.info_.numaId, dst.info_.numaId, sameNode);
 }
@@ -382,8 +385,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
     printf("\n--- Topology Matrix ---\n");
     printf("  Legend:  NVx = NVLink (x links)      PIX = single PCIe switch\n");
     printf("          PXB = multi PCIe switch       PHB = host bridge\n");
-    printf("          NODE = same NUMA              SYS = cross-NUMA\n");
-    printf("          NET  = cross-node\n\n");
+    printf("          C2C = NVLink-C2C (GPU-CPU)    NODE = same NUMA\n");
+    printf("          SYS = cross-NUMA              NET  = cross-node\n\n");
 
     std::vector<std::string> labels(N);
     int maxLabelLen = 0;

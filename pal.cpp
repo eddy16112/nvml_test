@@ -119,6 +119,10 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             strncpy(gpuInfo.busId, allBusIds[k], BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
+            nvmlC2cModeInfo_v1_t c2cInfo{};
+            gpuInfo.hasC2C = (nvmlDeviceGetC2cModeInfoV(hDev, &c2cInfo) == NVML_SUCCESS
+                              && c2cInfo.isC2cEnabled) ? 1 : 0;
+
             int lcnt = 0;
             for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
                 nvmlEnableState_t st;

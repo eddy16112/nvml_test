@@ -36,6 +36,7 @@ struct GPUInfo {
     char       uuid[UUID_SZ];
     char       busId[BUSID_SZ];
     char       name[NAME_SZ];
+    int8_t     hasC2C;
     int32_t    nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
     int32_t    nPcies;
