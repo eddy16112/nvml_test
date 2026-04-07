@@ -75,7 +75,7 @@ struct PCIEPeer {
 };
 
 struct GPUInfo {
-    CUdevice   deviceId;
+    CUdevice   deviceOrdinal;
     char       uuid[UUID_SZ];
     char       busId[BUSID_SZ];
     char       name[NAME_SZ];
@@ -130,7 +130,7 @@ struct TopologyNode
     {
         switch (info.type) {
             case CUIDTX_PROCESSOR_TYPE_GPU:
-                localId = static_cast<int>(info.gpu.deviceId);
+                localId = static_cast<int>(info.gpu.deviceOrdinal);
                 break;
             case CUIDTX_PROCESSOR_TYPE_CPU:
                 localId = info.numaId;
@@ -182,7 +182,7 @@ public:
         handle_.type = info.type;
         switch (info.type) {
             case CUIDTX_PROCESSOR_TYPE_GPU:
-                handle_.gpu.deviceId = static_cast<int>(info.gpu.deviceId);
+                handle_.gpu.deviceId = static_cast<int>(info.gpu.deviceOrdinal);
                 break;
             case CUIDTX_PROCESSOR_TYPE_CPU: handle_.cpu.cpuOrdinal = info.cpu.cpuOrdinal; break;
             default: break;
@@ -235,7 +235,7 @@ public:
 
 class CudaPAL final : public IProcessorAbstractionLayer {
 public:
-    CudaPAL() = default;
+    CudaPAL();
     ~CudaPAL() override;
 
     CudaPAL(const CudaPAL&) = delete;

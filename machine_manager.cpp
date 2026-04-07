@@ -161,9 +161,9 @@ static CUIDTXTopologyConnectionInfo resolveGpuCpu(
     if (gpuNumaId >= 0 && gpuNumaId == cpuNumaId) {
         if (gi.hasC2C)
             return {CUIDTX_CONN_C2C, gi.c2cBwGBps};
-        return {CUIDTX_CONN_NODE, -1.0f};
+        return {CUIDTX_CONN_NODE, gi.pcieBwGBps};
     }
-    return {CUIDTX_CONN_SYS, -1.0f};
+    return {CUIDTX_CONN_SYS, gi.pcieBwGBps};
 }
 
 static CUIDTXTopologyConnectionInfo resolveCpuCpu(int numaA, int numaB,
@@ -175,16 +175,15 @@ static CUIDTXTopologyConnectionInfo resolveCpuCpu(int numaA, int numaB,
     return {CUIDTX_CONN_SYS, -1.0f};
 }
 
-static CUIDTXTopologyConnectionInfo resolveNodeConnection(
+CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
         const Processor& src, const Processor& dst,
-        bool sameNode,
-        const MachineManager& srcMgr, const MachineManager& dstMgr) {
+        bool sameNode, const MachineManager& dstMgr) const {
 
     CUIDTXprocessorType st = src.handle_.type;
     CUIDTXprocessorType dt = dst.handle_.type;
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, srcMgr, dstMgr);
+        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, *this, dstMgr);
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
         return resolveGpuCpu(src.info_.gpu, dst.info_.numaId,
@@ -201,21 +200,21 @@ static CUIDTXTopologyConnectionInfo resolveNodeConnection(
  *  MachineManager::buildTopology
  * ================================================================== */
 
-void MachineManager::buildTopology(const MachineManager& remote) {
-    bool sameNode = (std::string(remote.hostname) == std::string(hostname));
+void MachineManager::buildTopology(const MachineManager& dst) {
+    bool sameNode = (std::string(dst.hostname) == std::string(hostname));
 
-    for (auto& [stype, svec] : processors_) {
-        for (auto& sp : svec) {
-            for (auto& [dtype, dvec] : remote.processors_) {
-                for (auto& dp : dvec) {
-                    TopologyNode::Pair cp = canonicalPair(sp->topologyNode_, dp->topologyNode_);
-                    if (cp.first.rank != rank)
+    for (auto& [srcType, srcVec] : processors_) {
+        for (auto& srcProc : srcVec) {
+            for (auto& [dstType, dstVec] : dst.processors_) {
+                for (auto& dstProc : dstVec) {
+                    TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode_, dstProc->topologyNode_);
+                    if (nodePair.first.rank != rank)
                         continue;
-                    if (topology.count(cp))
+                    if (topology.count(nodePair))
                         continue;
 
-                    topology[cp] = resolveNodeConnection(
-                        *sp, *dp, sameNode, *this, remote);
+                    topology[nodePair] = resolveNodeConnection(
+                        *srcProc, *dstProc, sameNode, dst);
                 }
             }
         }
@@ -325,9 +324,9 @@ void printTopology(const std::vector<MachineManager>& managers) {
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             if (i == j) continue;
-            TopologyNode::Pair cp = canonicalPair(G[i].tnode, G[j].tnode);
-            int owner = cp.first.rank;
-            auto it = managers[owner].topology.find(cp);
+            TopologyNode::Pair nodePair = canonicalPair(G[i].tnode, G[j].tnode);
+            int owner = nodePair.first.rank;
+            auto it = managers[owner].topology.find(nodePair);
             if (it != managers[owner].topology.end())
                 cinfo[i][j] = it->second;
             else

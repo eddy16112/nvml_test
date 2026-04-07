@@ -35,7 +35,14 @@
  *  CudaPAL – GPU collection via NVML + CUDA
  * ================================================================== */
 
-CudaPAL::~CudaPAL() = default;
+CudaPAL::CudaPAL() {
+    PAL_CHK_NVML(nvmlInit_v2());
+    PAL_CHK_CU(cuInit(0));
+}
+
+CudaPAL::~CudaPAL() {
+    PAL_CHK_NVML(nvmlShutdown());
+}
 
 static std::string cuUuidToStr(const CUuuid& u) {
     char buf[80];
@@ -71,9 +78,7 @@ static int nvmlGpuNumaId(nvmlDevice_t hDev) {
 }
 
 std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
-    std::vector<ProcessorInfo> result;
-
-    PAL_CHK_NVML(nvmlInit_v2());
+    std::vector<ProcessorInfo> infos;
 
     unsigned int nAllDev = 0;
     PAL_CHK_NVML(nvmlDeviceGetCount_v2(&nAllDev));
@@ -90,8 +95,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         PAL_CHK_NVML(nvmlDeviceGetUUID(hAll[i], allUuids[i], UUID_SZ));
     }
 
-    PAL_CHK_CU(cuInit(0));
-
     int devCount = 0;
     PAL_CHK_CU(cuDeviceGetCount(&devCount));
     int nGpus = std::min(devCount, MAX_GPUS);
@@ -103,7 +106,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         GPUInfo& gpuInfo = info.gpu;
         CUdevice cuDevice{};
         PAL_CHK_CU(cuDeviceGet(&cuDevice, ci));
-        gpuInfo.deviceId = cuDevice;
+        gpuInfo.deviceOrdinal = cuDevice;
         gpuInfo.nNvLinks = 0;
         gpuInfo.nPcies = 0;
 
@@ -205,19 +208,19 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             if (numaRes == CUDA_SUCCESS && numaVal >= 0) {
                 info.numaId = numaVal;
             } else {
-                int nml = nvmlGpuNumaId(hDev);
-                if (nml >= 0)
-                    info.numaId = nml;
+                assert(false);
+                // int nml = nvmlGpuNumaId(hDev);
+                // if (nml >= 0)
+                //     info.numaId = nml;
             }
 
             break;
         }
 
-        result.push_back(info);
+        infos.push_back(info);
     }
 
-    PAL_CHK_NVML(nvmlShutdown());
-    return result;
+    return infos;
 }
 
 /* ==================================================================

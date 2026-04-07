@@ -25,7 +25,7 @@ struct MachineManager {
     // Load processors from a PAL
     void loadPAL(IProcessorAbstractionLayer &pal);
 
-    void buildTopology(const MachineManager& remote);
+    void buildTopology(const MachineManager& dst);
 
     CUIDTXTopologyConnectionInfo query(const CUIDTXprocessor& a,
                                        const CUIDTXprocessor& b) const;
@@ -41,6 +41,11 @@ struct MachineManager {
         auto it = processors_.find(CUIDTX_PROCESSOR_TYPE_CPU);
         return (it != processors_.end()) ? it->second : empty;
     }
+
+private:
+    CUIDTXTopologyConnectionInfo resolveNodeConnection(
+            const Processor& src, const Processor& dst,
+            bool sameNode, const MachineManager& dstMgr) const;
 };
 
 CUIDTXTopologyConnectionInfo queryConnection(
