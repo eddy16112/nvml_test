@@ -58,9 +58,11 @@ static int countNvLinksByBusId(const GPUInfo& gi, const char* peerBusId,
 
 // NVLink peers are local devices. To tell GPUs from NVSwitches we only
 // compare against GPUs on the SAME node (identified by hostname), avoiding
-// false matches when different nodes have identical bus IDs.
-// NVSwitch bus ID keys are prefixed with hostname so that identically-
-// addressed NVSwitch ASICs on different nodes are treated as distinct.
+// false matches when different nodes have identical GPU bus IDs.
+// NVSwitch bus ID keys are NOT prefixed with hostname because NVSwitch
+// ASICs are physically shared across compute trays on systems like NVL72;
+// two GPUs on different nodes that connect to the same NVSwitch will
+// report the same NVSwitch bus ID, and that match is intentional.
 static int countNvSwitchLinks(const GPUInfo& gi, const GPUInfo& gj,
                               const MachineManager& srcMgr,
                               const MachineManager& dstMgr) {
@@ -70,16 +72,13 @@ static int countNvSwitchLinks(const GPUInfo& gi, const GPUInfo& gj,
         return false;
     };
 
-    std::string srcHost(srcMgr.hostname);
-    std::string dstHost(dstMgr.hostname);
-
     std::map<std::string, int> swI, swJ;
     for (auto& remote : getNvLinkPeers(gi))
         if (!isGpuOnMgr(remote.c_str(), srcMgr))
-            swI[srcHost + ":" + busKey(remote.c_str())]++;
+            swI[busKey(remote.c_str())]++;
     for (auto& remote : getNvLinkPeers(gj))
         if (!isGpuOnMgr(remote.c_str(), dstMgr))
-            swJ[dstHost + ":" + busKey(remote.c_str())]++;
+            swJ[busKey(remote.c_str())]++;
 
     int n = 0;
     for (auto& kv : swI)
