@@ -22,30 +22,27 @@ static constexpr int HOST_SZ        = 256;
 
 struct NvLinkPeer {
     char remoteBusId[BUSID_SZ];
-    int  active;
 };
 
 struct PCIEPeer {
     char busId[BUSID_SZ];
-    int  pcieTopo;
+    int  nvmlTopoLevel;
 };
 
-struct GpuInfo {
+struct GPUInfo {
     int      deviceId;
     char     uuid[UUID_SZ];
     char     busId[BUSID_SZ];
     char     name[NAME_SZ];
-    int      numaId;
     int      nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
     int      nPcies;
     PCIEPeer pcies[MAX_GPUS];
 };
 
-struct CpuInfo {
+struct CPUInfo {
     int32_t cpuOrdinal; // the index of the processor in the list of processors
     uint32_t osIndex; // the os_index of the physical core
-    int numaId;
 };
 
 enum CUIDTXprocessorType : uint8_t {
@@ -65,9 +62,10 @@ struct CUIDTXprocessor {
 
 struct ProcessorInfo {
     CUIDTXprocessorType type;
+    int numaId; // NUMA node for both GPU and CPU (-1 if unknown)
     union {
-        GpuInfo gpu;
-        CpuInfo cpu;
+        GPUInfo gpu;
+        CPUInfo cpu;
     };
 };
 
@@ -86,7 +84,7 @@ struct TopologyNode
                 localId = info.gpu.deviceId;
                 break;
             case CUIDTX_PROCESSOR_TYPE_CPU:
-                localId = info.cpu.numaId;
+                localId = info.numaId;
                 break;
             default: localId = -1; break;
         }

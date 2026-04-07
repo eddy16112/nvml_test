@@ -96,11 +96,11 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     for (int ci = 0; ci < nGpus; ci++) {
         ProcessorInfo info{};
         info.type = CUIDTX_PROCESSOR_TYPE_GPU;
-        GpuInfo& G = info.gpu;
-        G.deviceId = ci;
-        G.numaId = -1;
-        G.nNvLinks = 0;
-        G.nPcies = 0;
+        info.numaId = -1;
+        GPUInfo& gpuInfo = info.gpu;
+        gpuInfo.deviceId = ci;
+        gpuInfo.nNvLinks = 0;
+        gpuInfo.nPcies = 0;
 
         cudaDeviceProp prop;
         PAL_CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
@@ -110,9 +110,9 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             if (cudaUuid != allUuids[k]) continue;
             nvmlDevice_t hDev = hAll[k];
 
-            strncpy(G.uuid, allUuids[k], UUID_SZ - 1);
-            strncpy(G.busId, allBusIds[k], BUSID_SZ - 1);
-            PAL_CHK_NVML(nvmlDeviceGetName(hDev, G.name, NAME_SZ));
+            strncpy(gpuInfo.uuid, allUuids[k], UUID_SZ - 1);
+            strncpy(gpuInfo.busId, allBusIds[k], BUSID_SZ - 1);
+            PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
             int lcnt = 0;
             for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
@@ -125,33 +125,32 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 if (r != NVML_SUCCESS) continue;
                 if (lcnt >= MAX_LINKS)
                     break;
-                strncpy(G.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
-                G.nvLinks[lcnt].active = 1;
+                strncpy(gpuInfo.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
                 lcnt++;
             }
-            G.nNvLinks = lcnt;
+            gpuInfo.nNvLinks = lcnt;
 
-            G.nPcies = 0;
+            gpuInfo.nPcies = 0;
             for (int p = 0; p < nAll; p++) {
                 if (p == k) continue;
-                if (G.nPcies >= MAX_GPUS)
+                if (gpuInfo.nPcies >= MAX_GPUS)
                     break;
-                PCIEPeer& peer = G.pcies[G.nPcies];
+                PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
                 strncpy(peer.busId, allBusIds[p], BUSID_SZ - 1);
                 nvmlGpuTopologyLevel_t lvl;
                 nvmlReturn_t r2 = nvmlDeviceGetTopologyCommonAncestor(hDev, hAll[p], &lvl);
-                peer.pcieTopo = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
-                G.nPcies++;
+                peer.nvmlTopoLevel = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
+                gpuInfo.nPcies++;
             }
 
             int numaVal = -1;
             if (cudaDeviceGetAttribute(&numaVal, cudaDevAttrNumaId, ci) == cudaSuccess
                 && numaVal >= 0) {
-                G.numaId = numaVal;
+                info.numaId = numaVal;
             } else {
                 int nml = nvmlGpuNumaId(hDev);
                 if (nml >= 0)
-                    G.numaId = nml;
+                    info.numaId = nml;
             }
 
             break;
@@ -210,7 +209,7 @@ std::vector<ProcessorInfo> CPUPAL::enumerateProcessors() {
         info.cpu.osIndex = static_cast<uint32_t>(core->os_index);
 
         const hwloc_nodeset_t nodeset = core->nodeset ? core->nodeset : core->complete_nodeset;
-        info.cpu.numaId = nodeset ? hwloc_bitmap_first(nodeset) : -1;
+        info.numaId = nodeset ? hwloc_bitmap_first(nodeset) : -1;
 
         result.push_back(info);
         cpuOrdinal++;
