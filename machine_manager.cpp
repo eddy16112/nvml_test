@@ -26,15 +26,15 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
  *  Helpers
  * ================================================================== */
 
-static const char* topoTag(int t) {
+static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
     switch (t) {
-        case 0:  return "X";
-        case 10: return "PIX";
-        case 20: return "PXB";
-        case 30: return "PHB";
-        case 40: return "NODE";
-        case 50: return "SYS";
-        default: return "?";
+        case 0:  return CUIDTX_CONN_X;
+        case 10: return CUIDTX_CONN_PIX;
+        case 20: return CUIDTX_CONN_PXB;
+        case 30: return CUIDTX_CONN_PHB;
+        case 40: return CUIDTX_CONN_NODE;
+        case 50: return CUIDTX_CONN_SYS;
+        default: return CUIDTX_CONN_SYS;
     }
 }
 
@@ -86,7 +86,8 @@ static int countNvSwitchLinks(const GPUInfo& gi, const GPUInfo& gj,
     return n;
 }
 
-static std::string resolvePcie(const GPUInfo& gi, const GPUInfo& gj) {
+static CUIDTXTopologyConnectionInfo resolvePcie(const GPUInfo& gi,
+                                                 const GPUInfo& gj) {
     int pt = -1;
     for (int k = 0; k < gi.nPcies && pt < 0; k++)
         if (sameBus(gi.pcies[k].busId, gj.busId))
@@ -94,7 +95,15 @@ static std::string resolvePcie(const GPUInfo& gi, const GPUInfo& gj) {
     for (int k = 0; k < gj.nPcies && pt < 0; k++)
         if (sameBus(gj.pcies[k].busId, gi.busId))
             pt = gj.pcies[k].nvmlTopoLevel;
-    return topoTag(pt);
+    CUDTXprocessorConnectionType ct = pcieTopoToConnType(pt);
+    float bw = -1.0f;
+    if (ct == CUIDTX_CONN_PIX || ct == CUIDTX_CONN_PXB || ct == CUIDTX_CONN_PHB) {
+        float a = gi.pcieBwGBps, b = gj.pcieBwGBps;
+        if (a >= 0 && b >= 0)      bw = std::min(a, b);
+        else if (a >= 0)            bw = a;
+        else if (b >= 0)            bw = b;
+    }
+    return {ct, bw};
 }
 
 // Resolution order matters: NVLink/NVSwitch checks must run before the
@@ -102,11 +111,11 @@ static std::string resolvePcie(const GPUInfo& gi, const GPUInfo& gj) {
 // NVSwitch connections that span across nodes.
 //
 //  1. Same PCI bus (same GPU, same node only)        → X
-//  2. Direct NVLink between the two GPUs             → NVx
-//  3. Indirect NVLink via NVSwitch                   → NVx
+//  2. Direct NVLink between the two GPUs             → NVLINK
+//  3. Indirect NVLink via NVSwitch                   → NVLINK
 //  4. Cross-node with no NVLink/NVSwitch             → NET
 //  5. Same node, PCIe topology                       → PIX/PXB/PHB/NODE/SYS
-static std::string resolveGpuGpu(
+static CUIDTXTopologyConnectionInfo resolveGpuGpu(
         const GPUInfo& gi, const GPUInfo& gj,
         bool sameNode,
         const MachineManager& srcMgr, const MachineManager& dstMgr) {
@@ -115,48 +124,58 @@ static std::string resolveGpuGpu(
            gi.busId, gi.uuid, gj.busId, gj.uuid, sameNode);
 
     if (sameNode && sameBus(gi.busId, gj.busId))
-        return "X";
+        return {CUIDTX_CONN_X, -1.0f};
+
+    auto nvlinkBw = [&](int linkCount) -> float {
+        float perLink = gi.nvlinkBwPerLinkGBps;
+        return (perLink >= 0) ? linkCount * perLink : -1.0f;
+    };
 
     int nvl = countNvLinksByBusId(gi, gj.busId, sameNode);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
-        return "NV" + std::to_string(nvl);
+        return {CUIDTX_CONN_NVLINK, nvlinkBw(nvl)};
     }
 
     int nvs = countNvSwitchLinks(gi, gj, srcMgr, dstMgr);
     if (nvs > 0) {
         printf("    → NVSwitch = %d\n", nvs);
-        return "NV" + std::to_string(nvs);
+        return {CUIDTX_CONN_NVLINK, nvlinkBw(nvs)};
     }
 
     if (!sameNode) {
         printf("    → NET (cross-node, no NVLink/NVSwitch)\n");
-        return "NET";
+        return {CUIDTX_CONN_NET, -1.0f};
     }
 
-    std::string pcie = resolvePcie(gi, gj);
-    printf("    → PCIe = %s\n", pcie.c_str());
+    auto pcie = resolvePcie(gi, gj);
+    printf("    → PCIe = %s\n", connTypeTag(pcie.type));
     return pcie;
 }
 
-static std::string resolveGpuCpu(int gpuNumaId, int cpuNumaId,
-                                 bool sameNode, bool gpuHasC2C) {
+static CUIDTXTopologyConnectionInfo resolveGpuCpu(
+        const GPUInfo& gi, int cpuNumaId, int gpuNumaId,
+        bool sameNode) {
     if (!sameNode)
-        return "NET";
-    if (gpuNumaId >= 0 && gpuNumaId == cpuNumaId)
-        return gpuHasC2C ? "C2C" : "NODE";
-    return "SYS";
+        return {CUIDTX_CONN_NET, -1.0f};
+    if (gpuNumaId >= 0 && gpuNumaId == cpuNumaId) {
+        if (gi.hasC2C)
+            return {CUIDTX_CONN_C2C, gi.c2cBwGBps};
+        return {CUIDTX_CONN_NODE, -1.0f};
+    }
+    return {CUIDTX_CONN_SYS, -1.0f};
 }
 
-static std::string resolveCpuCpu(int numaA, int numaB, bool sameNode) {
+static CUIDTXTopologyConnectionInfo resolveCpuCpu(int numaA, int numaB,
+                                                   bool sameNode) {
     if (numaA == numaB && sameNode)
-        return "X";
+        return {CUIDTX_CONN_X, -1.0f};
     if (!sameNode)
-        return "NET";
-    return "SYS";
+        return {CUIDTX_CONN_NET, -1.0f};
+    return {CUIDTX_CONN_SYS, -1.0f};
 }
 
-static std::string resolveNodeConnection(
+static CUIDTXTopologyConnectionInfo resolveNodeConnection(
         const Processor& src, const Processor& dst,
         bool sameNode,
         const MachineManager& srcMgr, const MachineManager& dstMgr) {
@@ -168,12 +187,12 @@ static std::string resolveNodeConnection(
         return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, srcMgr, dstMgr);
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
-        return resolveGpuCpu(src.info_.numaId, dst.info_.numaId, sameNode,
-                             src.info_.gpu.hasC2C);
+        return resolveGpuCpu(src.info_.gpu, dst.info_.numaId,
+                             src.info_.numaId, sameNode);
 
     if (st == CUIDTX_PROCESSOR_TYPE_CPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuCpu(dst.info_.numaId, src.info_.numaId, sameNode,
-                             dst.info_.gpu.hasC2C);
+        return resolveGpuCpu(dst.info_.gpu, src.info_.numaId,
+                             dst.info_.numaId, sameNode);
 
     return resolveCpuCpu(src.info_.numaId, dst.info_.numaId, sameNode);
 }
@@ -214,20 +233,21 @@ static TopologyNode toTopoNode(const CUIDTXprocessor& h) {
     return TopologyNode(h.rank, h.type, localId);
 }
 
-std::string MachineManager::query(const CUIDTXprocessor& a,
-                                  const CUIDTXprocessor& b) const {
+CUIDTXTopologyConnectionInfo MachineManager::query(
+        const CUIDTXprocessor& a, const CUIDTXprocessor& b) const {
     TopologyNode ta = toTopoNode(a);
     TopologyNode tb = toTopoNode(b);
     auto it = topology.find(canonicalPair(ta, tb));
-    return (it != topology.end()) ? it->second : "";
+    if (it != topology.end()) return it->second;
+    return {CUIDTX_CONN_NET, -1.0f};
 }
 
-std::string queryConnection(const std::vector<MachineManager>& managers,
-                            const CUIDTXprocessor& a,
-                            const CUIDTXprocessor& b) {
+CUIDTXTopologyConnectionInfo queryConnection(
+        const std::vector<MachineManager>& managers,
+        const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
     int owner = std::min(a.rank, b.rank);
     if (owner < 0 || owner >= (int)managers.size())
-        return "";
+        return {CUIDTX_CONN_NET, -1.0f};
     return managers[owner].query(a, b);
 }
 
@@ -297,24 +317,29 @@ void printTopology(const std::vector<MachineManager>& managers) {
     for (auto& g : G) { if (g.isGpu()) nGpus++; else nCpus++; }
     const int N = (int)G.size();
 
-    /* ---- 2. Build printable connection matrix from topology maps ---- */
-    std::vector<std::vector<std::string>> conn(N, std::vector<std::string>(N));
+    /* ---- 2. Build connection info matrix from topology maps ---- */
+    CUIDTXTopologyConnectionInfo defaultConn = {CUIDTX_CONN_X, -1.0f};
+    std::vector<std::vector<CUIDTXTopologyConnectionInfo>> cinfo(
+        N, std::vector<CUIDTXTopologyConnectionInfo>(N, defaultConn));
 
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
-            if (i == j) { conn[i][j] = "X"; continue; }
-
+            if (i == j) continue;
             TopologyNode::Pair cp = canonicalPair(G[i].tnode, G[j].tnode);
             int owner = cp.first.rank;
-
             auto it = managers[owner].topology.find(cp);
-            if (it != managers[owner].topology.end()) {
-                conn[i][j] = it->second;
-            } else {
-                conn[i][j] = "?";
-            }
+            if (it != managers[owner].topology.end())
+                cinfo[i][j] = it->second;
+            else
+                cinfo[i][j] = {CUIDTX_CONN_NET, -1.0f};
         }
     }
+
+    // short string matrix for display
+    std::vector<std::vector<std::string>> conn(N, std::vector<std::string>(N));
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            conn[i][j] = connInfoStr(cinfo[i][j]);
 
     /* ---- 3. Print ---- */
     printf("\n");
@@ -373,20 +398,22 @@ void printTopology(const std::vector<MachineManager>& managers) {
         const auto& M = managers[r];
         printf("\n  Manager[%d] @ %s  (%zu entries)\n",
                r, M.hostname, M.topology.size());
-        for (auto& [pair, conn] : M.topology) {
+        for (auto& [pair, ci] : M.topology) {
+            std::string tag = connInfoStr(ci);
             printf("    %s <-> %s : %s\n",
                    topoNodeStr(pair.first).c_str(),
                    topoNodeStr(pair.second).c_str(),
-                   conn.c_str());
+                   tag.c_str());
         }
     }
 
     /* ---- Topology Matrix ---- */
     printf("\n--- Topology Matrix ---\n");
-    printf("  Legend:  NVx = NVLink (x links)      PIX = single PCIe switch\n");
+    printf("  Legend:  NVL = NVLink                  PIX = single PCIe switch\n");
     printf("          PXB = multi PCIe switch       PHB = host bridge\n");
     printf("          C2C = NVLink-C2C (GPU-CPU)    NODE = same NUMA\n");
-    printf("          SYS = cross-NUMA              NET  = cross-node\n\n");
+    printf("          SYS = cross-NUMA              NET  = cross-node\n");
+    printf("          (N) = bandwidth in GB/s\n\n");
 
     std::vector<std::string> labels(N);
     int maxLabelLen = 0;
@@ -412,8 +439,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
     bool any = false;
     for (int i = 0; i < N; i++)
         for (int j = i + 1; j < N; j++)
-            if (conn[i][j].size() >= 2 && conn[i][j][0] == 'N' && conn[i][j][1] == 'V') {
-                printf("  %s <-> %s : %-6s",
+            if (cinfo[i][j].type == CUIDTX_CONN_NVLINK) {
+                printf("  %s <-> %s : %-12s",
                        labels[i].c_str(), labels[j].c_str(),
                        conn[i][j].c_str());
                 if (G[i].isGpu() && G[j].isGpu())

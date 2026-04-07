@@ -20,14 +20,15 @@ struct MachineManager {
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
     ProcessorMap processors_;
 
-    std::map<TopologyNode::Pair, std::string> topology;
+    std::map<TopologyNode::Pair, CUIDTXTopologyConnectionInfo> topology;
 
     // Load processors from a PAL
     void loadPAL(IProcessorAbstractionLayer &pal);
 
     void buildTopology(const MachineManager& remote);
 
-    std::string query(const CUIDTXprocessor& a, const CUIDTXprocessor& b) const;
+    CUIDTXTopologyConnectionInfo query(const CUIDTXprocessor& a,
+                                       const CUIDTXprocessor& b) const;
 
     const std::vector<std::unique_ptr<Processor>>& gpus() const {
         static const std::vector<std::unique_ptr<Processor>> empty;
@@ -42,8 +43,9 @@ struct MachineManager {
     }
 };
 
-std::string queryConnection(const std::vector<MachineManager>& managers,
-                            const CUIDTXprocessor& a,
-                            const CUIDTXprocessor& b);
+CUIDTXTopologyConnectionInfo queryConnection(
+        const std::vector<MachineManager>& managers,
+        const CUIDTXprocessor& a,
+        const CUIDTXprocessor& b);
 
 void printTopology(const std::vector<MachineManager>& managers);

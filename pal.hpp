@@ -19,6 +19,49 @@ static constexpr int NAME_SZ        = 256;
 static constexpr int HOST_SZ        = 256;
 
 /* ==================================================================
+ *  Connection type enum + info struct
+ * ================================================================== */
+
+enum CUDTXprocessorConnectionType : uint8_t {
+    CUIDTX_CONN_X       = 0,
+    CUIDTX_CONN_NVLINK  = 1,
+    CUIDTX_CONN_C2C     = 2,
+    CUIDTX_CONN_PIX     = 3,
+    CUIDTX_CONN_PXB     = 4,
+    CUIDTX_CONN_PHB     = 5,
+    CUIDTX_CONN_NODE    = 6,
+    CUIDTX_CONN_SYS     = 7,
+    CUIDTX_CONN_NET     = 8,
+};
+
+typedef struct CUDTXprocessorConnectionInfo_st {
+    CUDTXprocessorConnectionType type;
+    float bandwidth; // GB/s, -1 if unknown/not applicable
+} CUIDTXTopologyConnectionInfo;
+
+inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
+    switch (t) {
+        case CUIDTX_CONN_X:      return "X";
+        case CUIDTX_CONN_NVLINK: return "NVL";
+        case CUIDTX_CONN_C2C:    return "C2C";
+        case CUIDTX_CONN_PIX:    return "PIX";
+        case CUIDTX_CONN_PXB:    return "PXB";
+        case CUIDTX_CONN_PHB:    return "PHB";
+        case CUIDTX_CONN_NODE:   return "NODE";
+        case CUIDTX_CONN_SYS:    return "SYS";
+        case CUIDTX_CONN_NET:    return "NET";
+        default:                  return "?";
+    }
+}
+
+inline std::string connInfoStr(const CUIDTXTopologyConnectionInfo& c) {
+    std::string s = connTypeTag(c.type);
+    if (c.bandwidth >= 0)
+        s += "(" + std::to_string((int)c.bandwidth) + ")";
+    return s;
+}
+
+/* ==================================================================
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
 
@@ -37,6 +80,9 @@ struct GPUInfo {
     char       busId[BUSID_SZ];
     char       name[NAME_SZ];
     bool       hasC2C;
+    float      nvlinkBwPerLinkGBps; // per-link NVLink speed, -1 if no NVLink
+    float      pcieBwGBps;          // theoretical max PCIe bandwidth, -1 if unknown
+    float      c2cBwGBps;           // C2C bandwidth, -1 if no C2C
     int32_t    nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
     int32_t    nPcies;

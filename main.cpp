@@ -36,7 +36,8 @@ struct TopoEntryWire {
     int     srcLocalId;
     uint8_t dstType;
     int     dstLocalId;
-    char    connType[8];
+    uint8_t connType;
+    float   connBandwidth;
 };
 
 struct RankDataWire {
@@ -62,14 +63,15 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
         w.nodes[w.nNodes++] = p->info_;
     }
     w.nTopoEntries = 0;
-    for (auto& [pair, conn] : M.topology) {
+    for (auto& [pair, ci] : M.topology) {
         if (w.nTopoEntries >= MAX_TOPO_PAIRS) break;
         TopoEntryWire& e = w.topoEntries[w.nTopoEntries];
-        e.srcType    = pair.first.type;
-        e.srcLocalId = pair.first.localId;
-        e.dstType    = pair.second.type;
-        e.dstLocalId = pair.second.localId;
-        strncpy(e.connType, conn.c_str(), sizeof(e.connType) - 1);
+        e.srcType       = pair.first.type;
+        e.srcLocalId    = pair.first.localId;
+        e.dstType       = pair.second.type;
+        e.dstLocalId    = pair.second.localId;
+        e.connType      = ci.type;
+        e.connBandwidth = ci.bandwidth;
         w.nTopoEntries++;
     }
 }
@@ -88,7 +90,10 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
         const TopoEntryWire& e = w.topoEntries[i];
         TopologyNode src(w.rank, (CUIDTXprocessorType)e.srcType, e.srcLocalId);
         TopologyNode dst(w.rank, (CUIDTXprocessorType)e.dstType, e.dstLocalId);
-        M.topology[canonicalPair(src, dst)] = e.connType;
+        CUIDTXTopologyConnectionInfo ci;
+        ci.type      = (CUDTXprocessorConnectionType)e.connType;
+        ci.bandwidth = e.connBandwidth;
+        M.topology[canonicalPair(src, dst)] = ci;
     }
 }
 
@@ -205,12 +210,13 @@ int main(int argc, char** argv) {
 
         auto printTest = [&](const char* label,
                              const CUIDTXprocessor& src, const CUIDTXprocessor& dst) {
-            std::string conn = queryConnection(managers, src, dst);
+            CUIDTXTopologyConnectionInfo ci = queryConnection(managers, src, dst);
+            std::string tag = connInfoStr(ci);
             printf("  %-20s  (%s -> %s) = %s\n",
                    label,
                    handleStr(src).c_str(),
                    handleStr(dst).c_str(),
-                   conn.empty() ? "(not found)" : conn.c_str());
+                   tag.c_str());
         };
 
         if (managers[0].gpus().size() >= 2) {

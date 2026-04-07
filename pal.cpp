@@ -123,6 +123,53 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             gpuInfo.hasC2C = (nvmlDeviceGetC2cModeInfoV(hDev, &c2cInfo) == NVML_SUCCESS
                               && c2cInfo.isC2cEnabled);
 
+            // NVLink per-link unidirectional speed
+            gpuInfo.nvlinkBwPerLinkGBps = -1.0f;
+            {
+                nvmlFieldValue_t fv{};
+                fv.fieldId = NVML_FI_DEV_NVLINK_SPEED_MBPS_COMMON;
+                nvmlDeviceGetFieldValues(hDev, 1, &fv);
+                if (fv.nvmlReturn == NVML_SUCCESS && fv.value.uiVal > 0) {
+                    gpuInfo.nvlinkBwPerLinkGBps = fv.value.uiVal / 1000.0f;
+                } else {
+                    // Fallback: derive from NVLink version of first active link
+                    unsigned int ver = 0;
+                    if (nvmlDeviceGetNvLinkVersion(hDev, 0, &ver) == NVML_SUCCESS && ver > 0) {
+                        static const float kNvlinkGBps[] =
+                            { 0, 20, 25, 25, 25, 50, 50 };
+                        gpuInfo.nvlinkBwPerLinkGBps =
+                            (ver < 7) ? kNvlinkGBps[ver] : 50.0f;
+                    }
+                }
+            }
+
+            // PCIe theoretical max bandwidth
+            gpuInfo.pcieBwGBps = -1.0f;
+            {
+                unsigned int gen = 0, width = 0;
+                if (nvmlDeviceGetMaxPcieLinkGeneration(hDev, &gen) == NVML_SUCCESS &&
+                    nvmlDeviceGetMaxPcieLinkWidth(hDev, &width) == NVML_SUCCESS && gen > 0) {
+                    static const float kGenGBpsPerLane[] =
+                        { 0, 0.25f, 0.5f, 0.985f, 1.969f, 3.938f, 7.877f };
+                    float perLane = (gen < 7) ? kGenGBpsPerLane[gen] : 0;
+                    gpuInfo.pcieBwGBps = perLane * width;
+                }
+            }
+
+            // C2C total bandwidth = link_count × per_link_speed
+            gpuInfo.c2cBwGBps = -1.0f;
+            if (gpuInfo.hasC2C) {
+                nvmlFieldValue_t fvs[2]{};
+                fvs[0].fieldId = NVML_FI_DEV_C2C_LINK_COUNT;
+                fvs[1].fieldId = NVML_FI_DEV_C2C_LINK_GET_MAX_BW;
+                nvmlDeviceGetFieldValues(hDev, 2, fvs);
+                unsigned int nLinks = 1;
+                if (fvs[0].nvmlReturn == NVML_SUCCESS && fvs[0].value.uiVal > 0)
+                    nLinks = fvs[0].value.uiVal;
+                if (fvs[1].nvmlReturn == NVML_SUCCESS)
+                    gpuInfo.c2cBwGBps = nLinks * fvs[1].value.uiVal / 1000.0f;
+            }
+
             int lcnt = 0;
             for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
                 nvmlEnableState_t st;
