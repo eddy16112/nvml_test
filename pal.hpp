@@ -22,17 +22,17 @@ static constexpr int HOST_SZ        = 256;
  *  Connection type enum + info struct
  * ================================================================== */
 
-enum CUDTXprocessorConnectionType : uint8_t {
-    CUIDTX_CONN_X       = 0,
-    CUIDTX_CONN_NVLINK  = 1,
-    CUIDTX_CONN_C2C     = 2,
-    CUIDTX_CONN_PIX     = 3,
-    CUIDTX_CONN_PXB     = 4,
-    CUIDTX_CONN_PHB     = 5,
-    CUIDTX_CONN_NODE    = 6,
-    CUIDTX_CONN_SYS     = 7,
-    CUIDTX_CONN_NET     = 8,
-};
+typedef enum CUDTXprocessorConnectionType_enum {
+    CUDTX_PROCESSOR_CONNECTION_TYPE_SELF = 0x0,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_PIX = 0x1,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_PXB = 0x2,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_PHB = 0x3,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK = 0x4,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_NODE = 0x5,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_SYS = 0x6,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_C2C = 0x7,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_MAX = 0x7FFFFFFF
+} CUDTXprocessorConnectionType;
 
 typedef struct CUDTXprocessorConnectionInfo_st {
     CUDTXprocessorConnectionType type;
@@ -41,16 +41,15 @@ typedef struct CUDTXprocessorConnectionInfo_st {
 
 inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
     switch (t) {
-        case CUIDTX_CONN_X:      return "X";
-        case CUIDTX_CONN_NVLINK: return "NVL";
-        case CUIDTX_CONN_C2C:    return "C2C";
-        case CUIDTX_CONN_PIX:    return "PIX";
-        case CUIDTX_CONN_PXB:    return "PXB";
-        case CUIDTX_CONN_PHB:    return "PHB";
-        case CUIDTX_CONN_NODE:   return "NODE";
-        case CUIDTX_CONN_SYS:    return "SYS";
-        case CUIDTX_CONN_NET:    return "NET";
-        default:                  return "?";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_SELF:   return "X";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_PIX:    return "PIX";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_PXB:    return "PXB";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_PHB:    return "PHB";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK: return "NVL";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_NODE:   return "NODE";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_SYS:    return "SYS";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_C2C:    return "C2C";
+        default:                                     return "NET";
     }
 }
 
