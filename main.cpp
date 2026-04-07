@@ -19,6 +19,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 #include <memory>
@@ -28,9 +29,7 @@
 
 static int gRank = 0;
 
-/* POD wire format for MPI_Allgather */
-
-static constexpr int MAX_TOPO_PAIRS = 512; // C(MAX_TOPO_NODES, 2) = 496 rounded up
+/* Fixed-size POD wire block: MPI_Allgather(MPI_BYTE, sizeof(RankDataWire)). */
 
 struct TopoEntryWire {
     uint8_t srcType;
@@ -65,7 +64,7 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
     w.nTopoEntries = 0;
     for (auto& [pair, conn] : M.topology) {
         if (w.nTopoEntries >= MAX_TOPO_PAIRS) break;
-        auto& e = w.topoEntries[w.nTopoEntries];
+        TopoEntryWire& e = w.topoEntries[w.nTopoEntries];
         e.srcType    = pair.first.type;
         e.srcLocalId = pair.first.localId;
         e.dstType    = pair.second.type;
@@ -86,7 +85,7 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
     }
     M.topology.clear();
     for (int i = 0; i < w.nTopoEntries; i++) {
-        auto& e = w.topoEntries[i];
+        const TopoEntryWire& e = w.topoEntries[i];
         TopologyNode src(w.rank, (CUIDTXprocessorType)e.srcType, e.srcLocalId);
         TopologyNode dst(w.rank, (CUIDTXprocessorType)e.dstType, e.dstLocalId);
         M.topology[canonicalPair(src, dst)] = e.connType;

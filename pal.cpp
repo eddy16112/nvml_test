@@ -94,12 +94,13 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     int nGpus = std::min(nCuda, MAX_GPUS);
 
     for (int ci = 0; ci < nGpus; ci++) {
-        ProcessorInfo info;
-        memset(&info, 0, sizeof(info));
+        ProcessorInfo info{};
         info.type = CUIDTX_PROCESSOR_TYPE_GPU;
         GpuInfo& G = info.gpu;
         G.deviceId = ci;
         G.numaId = -1;
+        G.nNvLinks = 0;
+        G.nPcies = 0;
 
         cudaDeviceProp prop;
         PAL_CHK_CUDA(cudaGetDeviceProperties(&prop, ci));
@@ -122,23 +123,25 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 nvmlPciInfo_t rp;
                 r = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
                 if (r != NVML_SUCCESS) continue;
-                if (lcnt < MAX_LINKS) {
-                    strncpy(G.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
-                    G.nvLinks[lcnt].active = 1;
-                    lcnt++;
-                }
+                if (lcnt >= MAX_LINKS)
+                    break;
+                strncpy(G.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
+                G.nvLinks[lcnt].active = 1;
+                lcnt++;
             }
             G.nNvLinks = lcnt;
 
-            G.nPeerTopos = 0;
+            G.nPcies = 0;
             for (int p = 0; p < nAll; p++) {
                 if (p == k) continue;
-                PeerTopo& pt = G.peerTopos[G.nPeerTopos];
-                strncpy(pt.busId, allBusIds[p], BUSID_SZ - 1);
+                if (G.nPcies >= MAX_GPUS)
+                    break;
+                PCIEPeer& peer = G.pcies[G.nPcies];
+                strncpy(peer.busId, allBusIds[p], BUSID_SZ - 1);
                 nvmlGpuTopologyLevel_t lvl;
                 nvmlReturn_t r2 = nvmlDeviceGetTopologyCommonAncestor(hDev, hAll[p], &lvl);
-                pt.pcieTopo = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
-                G.nPeerTopos++;
+                peer.pcieTopo = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
+                G.nPcies++;
             }
 
             int numaVal = -1;
@@ -201,8 +204,7 @@ std::vector<ProcessorInfo> CPUPAL::enumerateProcessors() {
         }
         if (!withinBinding) continue;
 
-        ProcessorInfo info;
-        memset(&info, 0, sizeof(info));
+        ProcessorInfo info{};
         info.type = CUIDTX_PROCESSOR_TYPE_CPU;
         info.cpu.cpuOrdinal = cpuOrdinal;
         info.cpu.osIndex = static_cast<uint32_t>(core->os_index);

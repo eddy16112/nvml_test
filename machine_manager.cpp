@@ -80,12 +80,12 @@ static int countNvSwitchLinks(const GpuInfo& gi, const GpuInfo& gj,
 
 static std::string resolvePcie(const GpuInfo& gi, const GpuInfo& gj) {
     int pt = -1;
-    for (int k = 0; k < gi.nPeerTopos && pt < 0; k++)
-        if (sameBus(gi.peerTopos[k].busId, gj.busId))
-            pt = gi.peerTopos[k].pcieTopo;
-    for (int k = 0; k < gj.nPeerTopos && pt < 0; k++)
-        if (sameBus(gj.peerTopos[k].busId, gi.busId))
-            pt = gj.peerTopos[k].pcieTopo;
+    for (int k = 0; k < gi.nPcies && pt < 0; k++)
+        if (sameBus(gi.pcies[k].busId, gj.busId))
+            pt = gi.pcies[k].pcieTopo;
+    for (int k = 0; k < gj.nPcies && pt < 0; k++)
+        if (sameBus(gj.pcies[k].busId, gi.busId))
+            pt = gj.pcies[k].pcieTopo;
     return topoTag(pt);
 }
 

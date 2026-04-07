@@ -9,6 +9,7 @@
 static constexpr int MAX_GPUS       = 16;
 static constexpr int MAX_NUMAS      = 16;
 static constexpr int MAX_TOPO_NODES = 32;
+static constexpr int MAX_TOPO_PAIRS = 512;
 static constexpr int MAX_LINKS      = 18;
 static constexpr int BUSID_SZ       = 32;
 static constexpr int UUID_SZ        = 96;
@@ -24,7 +25,7 @@ struct NvLinkPeer {
     int  active;
 };
 
-struct PeerTopo {
+struct PCIEPeer {
     char busId[BUSID_SZ];
     int  pcieTopo;
 };
@@ -37,8 +38,8 @@ struct GpuInfo {
     int      numaId;
     int      nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
-    int      nPeerTopos;
-    PeerTopo peerTopos[MAX_GPUS];
+    int      nPcies;
+    PCIEPeer pcies[MAX_GPUS];
 };
 
 struct CpuInfo {
