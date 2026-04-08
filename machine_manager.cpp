@@ -33,8 +33,8 @@ static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
         case 20: return CUDTX_PROCESSOR_CONNECTION_TYPE_PXB;
         case 30: return CUDTX_PROCESSOR_CONNECTION_TYPE_PHB;
         case 40: return CUDTX_PROCESSOR_CONNECTION_TYPE_NODE;
-        case 50: return CUDTX_PROCESSOR_CONNECTION_TYPE_SYS;
-        default: return CUDTX_PROCESSOR_CONNECTION_TYPE_SYS;
+        case 50: return CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM;
+        default: return CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM;
     }
 }
 
@@ -63,26 +63,31 @@ static int countNvLinksByBusId(const GPUInfo& gi, const char* peerBusId,
 // ASICs are physically shared across compute trays on systems like NVL72;
 // two GPUs on different nodes that connect to the same NVSwitch will
 // report the same NVSwitch bus ID, and that match is intentional.
-static int countNvSwitchLinks(const GPUInfo& gi, const GPUInfo& gj,
-                              const MachineManager& srcMgr,
-                              const MachineManager& dstMgr) {
-    auto isGpuOnMgr = [](const char* bid, const MachineManager& mgr) -> bool {
-        for (auto& p : mgr.gpus())
-            if (sameBus(bid, p->info_.gpu.busId)) return true;
+static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst,
+                              const std::vector<std::unique_ptr<Processor>>& srcGpus,
+                              const std::vector<std::unique_ptr<Processor>>& dstGpus) 
+{
+    auto isGpuInList = [](const char* bid, const std::vector<std::unique_ptr<Processor>>& gpus) -> bool 
+    {
+        for (const std::unique_ptr<Processor>& p : gpus) {
+            if (sameBus(bid, p->info_.gpu.busId)) {
+                return true;
+            }
+        }
         return false;
     };
 
-    std::map<std::string, int> swI, swJ;
-    for (auto& remote : getNvLinkPeers(gi))
-        if (!isGpuOnMgr(remote.c_str(), srcMgr))
-            swI[busKey(remote.c_str())]++;
-    for (auto& remote : getNvLinkPeers(gj))
-        if (!isGpuOnMgr(remote.c_str(), dstMgr))
-            swJ[busKey(remote.c_str())]++;
+    std::map<std::string, int> swSrc, swDst;
+    for (const std::string& remote : getNvLinkPeers(src))
+        if (!isGpuInList(remote.c_str(), srcGpus))
+            swSrc[busKey(remote.c_str())]++;
+    for (const std::string& remote : getNvLinkPeers(dst))
+        if (!isGpuInList(remote.c_str(), dstGpus))
+            swDst[busKey(remote.c_str())]++;
 
     int n = 0;
-    for (auto& kv : swI)
-        if (swJ.count(kv.first)) n += kv.second;
+    for (const std::pair<const std::string, int>& kv : swSrc)
+        if (swDst.count(kv.first)) n += kv.second;
     return n;
 }
 
@@ -116,28 +121,30 @@ static CUIDTXTopologyConnectionInfo resolvePcie(const GPUInfo& gi,
 //  4. Cross-node with no NVLink/NVSwitch             → NET
 //  5. Same node, PCIe topology                       → PIX/PXB/PHB/NODE/SYS
 static CUIDTXTopologyConnectionInfo resolveGpuGpu(
-        const GPUInfo& gi, const GPUInfo& gj,
+        const GPUInfo& src, const GPUInfo& dst,
         bool sameNode,
-        const MachineManager& srcMgr, const MachineManager& dstMgr) {
+        const std::vector<std::unique_ptr<Processor>>& srcGpus,
+        const std::vector<std::unique_ptr<Processor>>& dstGpus) 
+{
 
     printf("  [resolveGpuGpu] src=%s (uuid=%.40s) ↔ dst=%s (uuid=%.40s) sameNode=%d\n",
-           gi.busId, gi.uuid, gj.busId, gj.uuid, sameNode);
+           src.busId, src.uuid, dst.busId, dst.uuid, sameNode);
 
-    if (sameNode && sameBus(gi.busId, gj.busId))
+    if (strcmp(src.uuid, dst.uuid) == 0)
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
 
-    auto nvlinkBw = [&](int linkCount) -> float {
-        float perLink = gi.nvlinkBwPerLinkGBps;
+    float perLink = src.nvlinkBwPerLinkGBps;
+    auto nvlinkBw = [perLink](int linkCount) -> float {
         return (perLink >= 0) ? linkCount * perLink : -1.0f;
     };
 
-    int nvl = countNvLinksByBusId(gi, gj.busId, sameNode);
+    int nvl = countNvLinksByBusId(src, dst.busId, sameNode);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, nvlinkBw(nvl)};
     }
 
-    int nvs = countNvSwitchLinks(gi, gj, srcMgr, dstMgr);
+    int nvs = countNvSwitchLinks(src, dst, srcGpus, dstGpus);
     if (nvs > 0) {
         printf("    → NVSwitch = %d\n", nvs);
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, nvlinkBw(nvs)};
@@ -148,31 +155,37 @@ static CUIDTXTopologyConnectionInfo resolveGpuGpu(
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
     }
 
-    auto pcie = resolvePcie(gi, gj);
+    CUIDTXTopologyConnectionInfo pcie = resolvePcie(src, dst);
     printf("    → PCIe = %s\n", connTypeTag(pcie.type));
     return pcie;
 }
 
 static CUIDTXTopologyConnectionInfo resolveGpuCpu(
-        const GPUInfo& gi, int cpuNumaId, int gpuNumaId,
-        bool sameNode) {
-    if (!sameNode)
+        const ProcessorInfo& src, const ProcessorInfo& dst,
+        bool sameNode) 
+{
+    const GPUInfo& gpu = src.gpu;
+    if (!sameNode) {
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
-    if (gpuNumaId >= 0 && gpuNumaId == cpuNumaId) {
-        if (gi.hasC2C)
-            return {CUDTX_PROCESSOR_CONNECTION_TYPE_C2C, gi.c2cBwGBps};
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NODE, gi.pcieBwGBps};
     }
-    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYS, gi.pcieBwGBps};
+    if (src.numaId >= 0 && src.numaId == dst.numaId) {
+        if (gpu.hasC2C) {
+            return {CUDTX_PROCESSOR_CONNECTION_TYPE_C2C, gpu.c2cBwGBps};
+        }
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NODE, gpu.pcieBwGBps};
+    }
+    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, gpu.pcieBwGBps};
 }
 
-static CUIDTXTopologyConnectionInfo resolveCpuCpu(int numaA, int numaB,
+static CUIDTXTopologyConnectionInfo resolveCpuCpu(const ProcessorInfo& src, const ProcessorInfo& dst,
                                                    bool sameNode) {
-    if (numaA == numaB && sameNode)
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
-    if (!sameNode)
+    if (!sameNode) {
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
-    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYS, -1.0f};
+    }
+    if (src.numaId == dst.numaId) {
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
+    }
+    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, -1.0f};
 }
 
 CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
@@ -183,17 +196,15 @@ CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
     CUIDTXprocessorType dt = dst.handle_.type;
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, *this, dstMgr);
+        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, gpus(), dstMgr.gpus());
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
-        return resolveGpuCpu(src.info_.gpu, dst.info_.numaId,
-                             src.info_.numaId, sameNode);
+        return resolveGpuCpu(src.info_, dst.info_, sameNode);
 
     if (st == CUIDTX_PROCESSOR_TYPE_CPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuCpu(dst.info_.gpu, src.info_.numaId,
-                             dst.info_.numaId, sameNode);
+        return resolveGpuCpu(dst.info_, src.info_, sameNode);
 
-    return resolveCpuCpu(src.info_.numaId, dst.info_.numaId, sameNode);
+    return resolveCpuCpu(src.info_, dst.info_, sameNode);
 }
 
 /* ==================================================================

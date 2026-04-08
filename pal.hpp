@@ -7,6 +7,7 @@
 #include <cctype>
 #include <string>
 #include <vector>
+#include <hwloc.h>
 
 static constexpr int MAX_GPUS       = 16;
 static constexpr int MAX_NUMAS      = 16;
@@ -17,6 +18,37 @@ static constexpr int BUSID_SZ       = 32;
 static constexpr int UUID_SZ        = 96;
 static constexpr int NAME_SZ        = 256;
 static constexpr int HOST_SZ        = 256;
+
+struct CUIDTXCpuSet
+{
+    cpu_set_t cpuSet;
+
+    void clear() noexcept
+    {
+        CPU_ZERO(&cpuSet);
+    }
+
+    bool setBit(int index) noexcept
+    {
+        if (index >= CUIDTXCpuSet::maxBits) {
+            return false;
+        }
+        CPU_SET(index, &cpuSet);
+        return true;
+    }
+
+    [[nodiscard]] int isSet(int index) const noexcept
+    {
+        return CPU_ISSET(index, &cpuSet);
+    }
+
+    [[nodiscard]] int numOnes() const noexcept
+    {
+        return CPU_COUNT(&cpuSet);
+    }
+
+    static constexpr int maxBits = CPU_SETSIZE;
+};
 
 /* ==================================================================
  *  Connection type enum + info struct
@@ -29,7 +61,7 @@ typedef enum CUDTXprocessorConnectionType_enum {
     CUDTX_PROCESSOR_CONNECTION_TYPE_PHB = 0x3,
     CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK = 0x4,
     CUDTX_PROCESSOR_CONNECTION_TYPE_NODE = 0x5,
-    CUDTX_PROCESSOR_CONNECTION_TYPE_SYS = 0x6,
+    CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM = 0x6,
     CUDTX_PROCESSOR_CONNECTION_TYPE_C2C = 0x7,
     CUDTX_PROCESSOR_CONNECTION_TYPE_MAX = 0x7FFFFFFF
 } CUDTXprocessorConnectionType;
@@ -47,7 +79,7 @@ inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
         case CUDTX_PROCESSOR_CONNECTION_TYPE_PHB:    return "PHB";
         case CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK: return "NVL";
         case CUDTX_PROCESSOR_CONNECTION_TYPE_NODE:   return "NODE";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_SYS:    return "SYS";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM:    return "SYS";
         case CUDTX_PROCESSOR_CONNECTION_TYPE_C2C:    return "C2C";
         default:                                     return "NET";
     }
@@ -88,9 +120,12 @@ struct GPUInfo {
     PCIEPeer   pcies[MAX_GPUS];
 };
 
-struct CPUInfo {
+struct CPUInfo
+{
     int32_t cpuOrdinal; // the index of the processor in the list of processors
+    uint32_t coreIndex; // the global index of the physical core on the local physical node
     uint32_t osIndex; // the os_index of the physical core
+    CUIDTXCpuSet cpuset; // the cpuset of the physical core, contains the os_index of the PUs in the core
 };
 
 enum CUIDTXprocessorType : uint8_t {
@@ -246,7 +281,7 @@ public:
 
 class CPUPAL final : public IProcessorAbstractionLayer {
 public:
-    CPUPAL() = default;
+    CPUPAL();
     ~CPUPAL() override;
 
     CPUPAL(const CPUPAL&) = delete;
@@ -254,4 +289,6 @@ public:
 
     [[nodiscard]] CUIDTXprocessorType processorType() const override { return CUIDTX_PROCESSOR_TYPE_CPU; }
     [[nodiscard]] std::vector<ProcessorInfo> enumerateProcessors() override;
+
+    hwloc_topology_t topo_;
 };

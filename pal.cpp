@@ -5,9 +5,10 @@
 #include <cstring>
 #include <algorithm>
 
+#include <cassert>
+#include <stdexcept>
 #include <mpi.h>
 #include <nvml.h>
-#include <hwloc.h>
 
 #define PAL_CHK_NVML(call) do {                                    \
     nvmlReturn_t r_ = (call);                                      \
@@ -217,6 +218,8 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             break;
         }
 
+        printf("enumerateProcessors: GPU %d, nNvLinks=%d, nPcies=%d\n", ci, info.gpu.nNvLinks, info.gpu.nPcies);
+
         infos.push_back(info);
     }
 
@@ -227,55 +230,81 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
  *  CPUPAL – CPU collection via hwloc (NUMA granularity)
  * ================================================================== */
 
-CPUPAL::~CPUPAL() = default;
+ CPUPAL::CPUPAL()
+ {
+     if (hwloc_topology_init(&topo_) != 0) {
+         throw std::runtime_error("Failed to initialize hwloc topology");
+     }
+     if (hwloc_topology_load(topo_) != 0) {
+         hwloc_topology_destroy(topo_);
+         throw std::runtime_error("Failed to load hwloc topology");
+     }
+ }
+ 
+ CPUPAL::~CPUPAL()
+ {
+     hwloc_topology_destroy(topo_);
+ }
 
-std::vector<ProcessorInfo> CPUPAL::enumerateProcessors() {
-    std::vector<ProcessorInfo> result;
+std::vector<ProcessorInfo> CPUPAL::enumerateProcessors() 
+{
+    std::vector<ProcessorInfo> infos;
 
-    hwloc_topology_t topo;
-    hwloc_topology_init(&topo);
-    hwloc_topology_load(topo);
-
-    hwloc_cpuset_t binding = hwloc_bitmap_alloc();
-    if (hwloc_get_cpubind(topo, binding, HWLOC_CPUBIND_PROCESS) != 0)
-        hwloc_bitmap_fill(binding);
-
-    const int numCores = hwloc_get_nbobjs_by_type(topo, HWLOC_OBJ_CORE);
-    int32_t cpuOrdinal = 0;
-
-    for (int coreIdx = 0; coreIdx < numCores; coreIdx++) {
-        hwloc_obj_t core = hwloc_get_obj_by_type(topo, HWLOC_OBJ_CORE, coreIdx);
-        if (!core) continue;
-
-        const hwloc_cpuset_t cpuset = core->cpuset ? core->cpuset : core->complete_cpuset;
-        if (!cpuset) continue;
-
-        const int numPus = hwloc_get_nbobjs_inside_cpuset_by_type(topo, cpuset, HWLOC_OBJ_PU);
-        if (numPus <= 0) continue;
-
-        bool withinBinding = false;
-        for (int puIdx = 0; puIdx < numPus; puIdx++) {
-            hwloc_obj_t pu = hwloc_get_obj_inside_cpuset_by_type(topo, cpuset, HWLOC_OBJ_PU, puIdx);
-            if (pu && hwloc_bitmap_isset(binding, pu->os_index)) {
-                withinBinding = true;
-                break;
+        // get the binding of the current process, and we need to filter out the processors that are not in the binding
+        hwloc_cpuset_t bindingCpuset = hwloc_bitmap_alloc();
+        if (hwloc_get_cpubind(topo_, bindingCpuset, HWLOC_CPUBIND_PROCESS) != 0) {
+            hwloc_bitmap_free(bindingCpuset);
+            throw std::runtime_error("Failed to get CPU binding info");
+            return infos;
+        }
+    
+        // iterate over all physical processors
+        const int numCores = hwloc_get_nbobjs_by_type(topo_, HWLOC_OBJ_CORE);
+        int32_t cpuOrdinal = 0;
+        for (int coreIdx = 0; coreIdx < numCores; coreIdx++) {
+            hwloc_obj_t core = hwloc_get_obj_by_type(topo_, HWLOC_OBJ_CORE, coreIdx);
+            if (core == nullptr) {
+                continue;
+            }
+    
+            const hwloc_cpuset_t cpuset = core->cpuset ? core->cpuset : core->complete_cpuset;
+            const int numPus = hwloc_get_nbobjs_inside_cpuset_by_type(topo_, cpuset, HWLOC_OBJ_PU);
+            if (numPus <= 0) {
+                throw std::runtime_error("No PU found for core " + std::to_string(coreIdx));
+            }
+    
+            // check if the core is within the current process binding cpuset
+            bool withinCurrentProcessBinding = false;
+    
+            CUIDTXCpuSet core_cpuset;
+            core_cpuset.clear();
+    
+            for (int puIdx = 0; puIdx < numPus; puIdx++) {
+                hwloc_obj_t pu = hwloc_get_obj_inside_cpuset_by_type(topo_, cpuset, HWLOC_OBJ_PU, puIdx);
+                assert(pu != nullptr);
+                if (hwloc_bitmap_isset(bindingCpuset, pu->os_index)) {
+                    if (!core_cpuset.setBit(pu->os_index)) {
+                        throw std::runtime_error("Failed to set bit for PU " + std::to_string(pu->os_index)
+                                + " because it exceeds maxBits=" + std::to_string(CUIDTXCpuSet::maxBits));
+                    }
+                    withinCurrentProcessBinding = true;
+                }
+            }
+            if (withinCurrentProcessBinding) {
+                ProcessorInfo info;
+                info.type = CUIDTX_PROCESSOR_TYPE_CPU;
+                info.cpu.coreIndex = static_cast<uint32_t>(coreIdx);
+                info.cpu.osIndex = static_cast<uint32_t>(core->os_index);
+                info.cpu.cpuOrdinal = cpuOrdinal;
+                info.cpu.cpuset = core_cpuset;
+                const hwloc_nodeset_t nodeset = core->nodeset ? core->nodeset : core->complete_nodeset;
+                info.numaId = static_cast<int32_t>(hwloc_bitmap_first(nodeset));
+                infos.push_back(info);
+                cpuOrdinal++;
             }
         }
-        if (!withinBinding) continue;
-
-        ProcessorInfo info{};
-        info.type = CUIDTX_PROCESSOR_TYPE_CPU;
-        info.cpu.cpuOrdinal = cpuOrdinal;
-        info.cpu.osIndex = static_cast<uint32_t>(core->os_index);
-
-        const hwloc_nodeset_t nodeset = core->nodeset ? core->nodeset : core->complete_nodeset;
-        info.numaId = nodeset ? hwloc_bitmap_first(nodeset) : -1;
-
-        result.push_back(info);
-        cpuOrdinal++;
-    }
-
-    hwloc_bitmap_free(binding);
-    hwloc_topology_destroy(topo);
-    return result;
+    
+        hwloc_bitmap_free(bindingCpuset);
+    
+        return infos;
 }
