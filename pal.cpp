@@ -1,6 +1,7 @@
 #include "pal.hpp"
 
 #include <cstdio>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
@@ -55,50 +56,26 @@ static std::string cuUuidToStr(const CUuuid& u) {
     return buf;
 }
 
-/** NVML bitmask of NUMA nodes; use lowest set bit as canonical node id. */
-static int nvmlGpuNumaId(nvmlDevice_t hDev) {
-    unsigned long nodeSet[4] = {};
-    const unsigned int nwords = (unsigned int)(sizeof(nodeSet) / sizeof(nodeSet[0]));
-    nvmlReturn_t r = nvmlDeviceGetMemoryAffinity(hDev, nwords, nodeSet,
-                                               NVML_AFFINITY_SCOPE_NODE);
-    if (r != NVML_SUCCESS)
-        return -1;
-    for (unsigned int w = 0; w < nwords; w++) {
-        unsigned long m = nodeSet[w];
-        if (m) {
-#if defined(__GNUC__) || defined(__clang__)
-            return (int)__builtin_ctzl(m) + (int)(w * (sizeof(unsigned long) * 8));
-#else
-            for (int b = 0; b < (int)(sizeof(unsigned long) * 8); b++)
-                if (m & (1UL << b))
-                    return (int)(b + w * (sizeof(unsigned long) * 8));
-#endif
-        }
-    }
-    return -1;
-}
-
 std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     std::vector<ProcessorInfo> infos;
 
     unsigned int nAllDev = 0;
     PAL_CHK_NVML(nvmlDeviceGetCount_v2(&nAllDev));
-    int nAll = std::min((int)nAllDev, MAX_GPUS);
+    int nAll = static_cast<int>(nAllDev);
 
-    nvmlDevice_t hAll[MAX_GPUS];
-    char allBusIds[MAX_GPUS][BUSID_SZ] = {};
-    char allUuids[MAX_GPUS][UUID_SZ] = {};
+    std::vector<nvmlDevice_t> hAll(nAll);
+    std::vector<std::array<char, BUSID_SZ>> allBusIds((size_t)nAll);
+    std::vector<std::array<char, UUID_SZ>>  allUuids((size_t)nAll);
     for (int i = 0; i < nAll; i++) {
         PAL_CHK_NVML(nvmlDeviceGetHandleByIndex_v2(i, &hAll[i]));
         nvmlPciInfo_t pci;
         PAL_CHK_NVML(nvmlDeviceGetPciInfo_v3(hAll[i], &pci));
-        strncpy(allBusIds[i], pci.busId, BUSID_SZ - 1);
-        PAL_CHK_NVML(nvmlDeviceGetUUID(hAll[i], allUuids[i], UUID_SZ));
+        strncpy(allBusIds[i].data(), pci.busId, BUSID_SZ - 1);
+        PAL_CHK_NVML(nvmlDeviceGetUUID(hAll[i], allUuids[i].data(), UUID_SZ));
     }
 
-    int devCount = 0;
-    PAL_CHK_CU(cuDeviceGetCount(&devCount));
-    int nGpus = std::min(devCount, MAX_GPUS);
+    int nGpus = 0;
+    PAL_CHK_CU(cuDeviceGetCount(&nGpus));
 
     for (int ci = 0; ci < nGpus; ci++) {
         ProcessorInfo info{};
@@ -110,17 +87,19 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         gpuInfo.deviceOrdinal = cuDevice;
         gpuInfo.nNvLinks = 0;
         gpuInfo.nPcies = 0;
+        PAL_CHK_CU(cuDeviceGetAttribute(
+            &(info.numaId), CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cuDevice));
 
         CUuuid cuUuid{};
         PAL_CHK_CU(cuDeviceGetUuid_v2(&cuUuid, cuDevice));
         std::string cudaUuid = cuUuidToStr(cuUuid);
 
         for (int k = 0; k < nAll; k++) {
-            if (cudaUuid != allUuids[k]) continue;
+            if (cudaUuid != allUuids[k].data()) continue;
             nvmlDevice_t hDev = hAll[k];
 
-            strncpy(gpuInfo.uuid, allUuids[k], UUID_SZ - 1);
-            strncpy(gpuInfo.busId, allBusIds[k], BUSID_SZ - 1);
+            strncpy(gpuInfo.uuid, allUuids[k].data(), UUID_SZ - 1);
+            strncpy(gpuInfo.busId, allBusIds[k].data(), BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
             nvmlC2cModeInfo_v1_t c2cInfo{};
@@ -201,23 +180,17 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 if (gpuInfo.nPcies >= MAX_GPUS)
                     break;
                 PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
-                strncpy(peer.busId, allBusIds[p], BUSID_SZ - 1);
+                strncpy(peer.busId, allBusIds[p].data(), BUSID_SZ - 1);
                 nvmlGpuTopologyLevel_t lvl;
                 nvmlReturn_t r2 = nvmlDeviceGetTopologyCommonAncestor(hDev, hAll[p], &lvl);
                 peer.nvmlTopoLevel = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
-                gpuInfo.nPcies++;
-            }
 
-            int numaVal = -1;
-            CUresult numaRes = cuDeviceGetAttribute(
-                &numaVal, CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cuDevice);
-            if (numaRes == CUDA_SUCCESS && numaVal >= 0) {
-                info.numaId = numaVal;
-            } else {
-                assert(false);
-                // int nml = nvmlGpuNumaId(hDev);
-                // if (nml >= 0)
-                //     info.numaId = nml;
+                nvmlGpuP2PStatus_t p2pStatus = NVML_P2P_STATUS_NOT_SUPPORTED;
+                nvmlReturn_t r3 = nvmlDeviceGetP2PStatus(hDev, hAll[p],
+                    NVML_P2P_CAPS_INDEX_ATOMICS, &p2pStatus);
+                peer.atomicsSupported = (r3 == NVML_SUCCESS &&
+                                         p2pStatus == NVML_P2P_STATUS_OK);
+                gpuInfo.nPcies++;
             }
 
             break;

@@ -70,6 +70,7 @@ typedef enum CUDTXprocessorConnectionType_enum {
 typedef struct CUDTXprocessorConnectionInfo_st {
     CUDTXprocessorConnectionType type;
     float bandwidth; // GB/s, -1 if unknown/not applicable
+    bool supportAtomics;
 } CUDTXprocessorConnectionInfo;
 
 inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
@@ -90,6 +91,8 @@ inline std::string connInfoStr(const CUDTXprocessorConnectionInfo& c) {
     std::string s = connTypeTag(c.type);
     if (c.bandwidth >= 0)
         s += "(" + std::to_string((int)c.bandwidth) + ")";
+    if (c.supportAtomics)
+        s += "[A]";
     return s;
 }
 
@@ -105,6 +108,7 @@ struct NvLinkPeer {
 struct PCIEPeer {
     char busId[BUSID_SZ];
     int  nvmlTopoLevel;
+    bool atomicsSupported;
 };
 
 struct GPUInfo {

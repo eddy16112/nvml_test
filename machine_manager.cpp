@@ -97,6 +97,13 @@ static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
     return n;
 }
 
+static bool lookupAtomics(const GPUInfo& src, const char* peerBusId) {
+    for (int k = 0; k < src.nPcies; k++)
+        if (sameBus(src.pcies[k].busId, peerBusId))
+            return src.pcies[k].atomicsSupported;
+    return false;
+}
+
 static CUDTXprocessorConnectionInfo resolvePcie(const GPUInfo& gi,
                                                  const GPUInfo& gj) {
     int pt = -1;
@@ -114,14 +121,15 @@ static CUDTXprocessorConnectionInfo resolvePcie(const GPUInfo& gi,
         else if (a >= 0)            bw = a;
         else if (b >= 0)            bw = b;
     }
-    return {ct, bw};
+    bool atomics = lookupAtomics(gi, gj.busId);
+    return {ct, bw, atomics};
 }
 
 // Resolution order matters: NVLink/NVSwitch checks must run before the
 // cross-node fallback because systems like NVL72 can have NVLink and
 // NVSwitch connections that span across nodes.
 //
-//  1. Same PCI bus (same GPU, same node only)        → X
+//  1. Same UUID                                      → X
 //  2. Direct NVLink between the two GPUs             → NVLINK
 //  3. Indirect NVLink via NVSwitch                   → NVLINK
 //  4. Cross-node with no NVLink/NVSwitch             → NET
@@ -134,28 +142,28 @@ static CUDTXprocessorConnectionInfo resolveGpuGpu(
            src.busId, src.uuid, dst.busId, dst.uuid, sameNode);
 
     if (strcmp(src.uuid, dst.uuid) == 0)
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f, false};
 
-    float perLink = src.nvlinkBwPerLinkGBps;
-    auto nvlinkBw = [perLink](int linkCount) -> float {
-        return (perLink >= 0) ? linkCount * perLink : -1.0f;
-    };
+    const float perLinkBw = src.nvlinkBwPerLinkGBps;
+    bool atomics = lookupAtomics(src, dst.busId);
 
     int nvl = countDirectNvLinks(src, dst.busId, sameNode);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, nvlinkBw(nvl)};
+        float bw = (perLinkBw >= 0) ? nvl * perLinkBw : -1.0f;
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, bw, atomics};
     }
 
     int nvs = countNvSwitchLinks(src, dst);
     if (nvs > 0) {
         printf("    → NVSwitch = %d\n", nvs);
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, nvlinkBw(nvs)};
+        float bw = (perLinkBw >= 0) ? nvs * perLinkBw : -1.0f;
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, bw, atomics};
     }
 
     if (!sameNode) {
         printf("    → NET (cross-node, no NVLink/NVSwitch)\n");
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
     }
 
     CUDTXprocessorConnectionInfo pcie = resolvePcie(src, dst);
@@ -169,26 +177,26 @@ static CUDTXprocessorConnectionInfo resolveGpuCpu(
 {
     const GPUInfo& gpu = src.gpu;
     if (!sameNode) {
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
     }
     if (src.numaId >= 0 && src.numaId == dst.numaId) {
         if (gpu.hasC2C) {
-            return {CUDTX_PROCESSOR_CONNECTION_TYPE_C2C, gpu.c2cBwGBps};
+            return {CUDTX_PROCESSOR_CONNECTION_TYPE_C2C, gpu.c2cBwGBps, false};
         }
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NODE, gpu.pcieBwGBps};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NODE, gpu.pcieBwGBps, false};
     }
-    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, gpu.pcieBwGBps};
+    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, gpu.pcieBwGBps, false};
 }
 
 static CUDTXprocessorConnectionInfo resolveCpuCpu(const ProcessorInfo& src, const ProcessorInfo& dst,
                                                    bool sameNode) {
     if (!sameNode) {
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
     }
     if (src.numaId == dst.numaId) {
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f, false};
     }
-    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, -1.0f};
+    return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, -1.0f, false};
 }
 
 CUDTXprocessorConnectionInfo MachineManager::resolveNodeConnection(
@@ -255,7 +263,7 @@ CUDTXprocessorConnectionInfo MachineManager::query(
     TopologyNode tb = toTopoNode(b);
     auto it = topologyMap_.find(canonicalPair(ta, tb));
     if (it != topologyMap_.end()) return it->second;
-    return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
+    return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
 }
 
 CUDTXprocessorConnectionInfo queryConnection(
@@ -263,7 +271,7 @@ CUDTXprocessorConnectionInfo queryConnection(
         const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
     uint32_t owner = std::min(a.memberId, b.memberId);
     if (owner < 0 || owner >= (int)managers.size())
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
     return managers[owner].query(a, b);
 }
 
@@ -362,7 +370,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     const int N = (int)G.size();
 
     /* ---- 2. Build connection info matrix from topology maps ---- */
-    CUDTXprocessorConnectionInfo defaultConn = {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
+    CUDTXprocessorConnectionInfo defaultConn = {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f, false};
     std::vector<std::vector<CUDTXprocessorConnectionInfo>> cinfo(
         N, std::vector<CUDTXprocessorConnectionInfo>(N, defaultConn));
 
@@ -375,7 +383,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
             if (it != managers[owner].topologyMap().end())
                 cinfo[i][j] = it->second;
             else
-                cinfo[i][j] = {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
+                cinfo[i][j] = {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
         }
     }
 
@@ -425,7 +433,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     printf("          PXB = multi PCIe switch       PHB = host bridge\n");
     printf("          C2C = NVLink-C2C (GPU-CPU)    NODE = same NUMA\n");
     printf("          SYS = cross-NUMA              NET  = cross-node\n");
-    printf("          (N) = bandwidth in GB/s\n\n");
+    printf("          (N) = bandwidth in GB/s    [A] = atomics supported\n\n");
 
     std::vector<std::string> labels(N);
     int maxLabelLen = 0;

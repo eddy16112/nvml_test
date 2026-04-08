@@ -38,6 +38,7 @@ struct TopoEntryWire {
     int     dstLocalId;
     uint8_t connType;
     float   connBandwidth;
+    uint8_t connAtomics;
 };
 
 struct RankDataWire {
@@ -72,6 +73,7 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
         e.dstLocalId    = pair.second.localId;
         e.connType      = ci.type;
         e.connBandwidth = ci.bandwidth;
+        e.connAtomics   = ci.supportAtomics ? 1 : 0;
         w.nTopoEntries++;
     }
 }
@@ -90,8 +92,9 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
         TopologyNode src(w.rank, (CUIDTXprocessorType)e.srcType, e.srcLocalId);
         TopologyNode dst(w.rank, (CUIDTXprocessorType)e.dstType, e.dstLocalId);
         CUDTXprocessorConnectionInfo ci;
-        ci.type      = (CUDTXprocessorConnectionType)e.connType;
-        ci.bandwidth = e.connBandwidth;
+        ci.type           = (CUDTXprocessorConnectionType)e.connType;
+        ci.bandwidth      = e.connBandwidth;
+        ci.supportAtomics = (e.connAtomics != 0);
         M.addTopologyEntry(canonicalPair(src, dst), ci);
     }
 }
