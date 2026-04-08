@@ -18,7 +18,7 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
     assert(processors.empty());
     processors.reserve(processorInfos.size());
     for (const ProcessorInfo &info : processorInfos) {
-        processors.emplace_back(std::make_unique<Processor>(info, memberId));
+        processors.emplace_back(std::make_unique<Processor>(info, memberId_));
     }
 }
 
@@ -27,7 +27,7 @@ void MachineManager::addProcessor(CUIDTXprocessorType type, std::unique_ptr<Proc
 }
 
 void MachineManager::addTopologyEntry(const TopologyNode::Pair& pair,
-                                      const CUIDTXTopologyConnectionInfo& ci) {
+                                      const CUDTXprocessorConnectionInfo& ci) {
     topologyMap_[pair] = ci;
 }
 
@@ -97,7 +97,7 @@ static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
     return n;
 }
 
-static CUIDTXTopologyConnectionInfo resolvePcie(const GPUInfo& gi,
+static CUDTXprocessorConnectionInfo resolvePcie(const GPUInfo& gi,
                                                  const GPUInfo& gj) {
     int pt = -1;
     for (int k = 0; k < gi.nPcies && pt < 0; k++)
@@ -126,7 +126,7 @@ static CUIDTXTopologyConnectionInfo resolvePcie(const GPUInfo& gi,
 //  3. Indirect NVLink via NVSwitch                   → NVLINK
 //  4. Cross-node with no NVLink/NVSwitch             → NET
 //  5. Same node, PCIe topology                       → PIX/PXB/PHB/NODE/SYS
-static CUIDTXTopologyConnectionInfo resolveGpuGpu(
+static CUDTXprocessorConnectionInfo resolveGpuGpu(
         const GPUInfo& src, const GPUInfo& dst,
         bool sameNode) {
 
@@ -158,12 +158,12 @@ static CUIDTXTopologyConnectionInfo resolveGpuGpu(
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
     }
 
-    CUIDTXTopologyConnectionInfo pcie = resolvePcie(src, dst);
+    CUDTXprocessorConnectionInfo pcie = resolvePcie(src, dst);
     printf("    → PCIe = %s\n", connTypeTag(pcie.type));
     return pcie;
 }
 
-static CUIDTXTopologyConnectionInfo resolveGpuCpu(
+static CUDTXprocessorConnectionInfo resolveGpuCpu(
         const ProcessorInfo& src, const ProcessorInfo& dst,
         bool sameNode) 
 {
@@ -180,7 +180,7 @@ static CUIDTXTopologyConnectionInfo resolveGpuCpu(
     return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, gpu.pcieBwGBps};
 }
 
-static CUIDTXTopologyConnectionInfo resolveCpuCpu(const ProcessorInfo& src, const ProcessorInfo& dst,
+static CUDTXprocessorConnectionInfo resolveCpuCpu(const ProcessorInfo& src, const ProcessorInfo& dst,
                                                    bool sameNode) {
     if (!sameNode) {
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
@@ -191,7 +191,7 @@ static CUIDTXTopologyConnectionInfo resolveCpuCpu(const ProcessorInfo& src, cons
     return {CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM, -1.0f};
 }
 
-CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
+CUDTXprocessorConnectionInfo MachineManager::resolveNodeConnection(
         const Processor& src, const Processor& dst,
         bool sameNode, const MachineManager& dstMgr) const {
 
@@ -222,12 +222,12 @@ void MachineManager::buildTopology(const MachineManager& dst) {
             for (auto& [dstType, dstVec] : dst.processors_) {
                 for (auto& dstProc : dstVec) {
                     TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode(), dstProc->topologyNode());
-                    if (nodePair.first.memberId != memberId)
+                    if (nodePair.first.memberId != memberId_)
                         continue;
                     if (topologyMap_.count(nodePair))
                         continue;
 
-                    CUIDTXTopologyConnectionInfo ci = resolveNodeConnection(
+                    CUDTXprocessorConnectionInfo ci = resolveNodeConnection(
                         *srcProc, *dstProc, sameNode, dst);
                     if (ci.type == CUDTX_PROCESSOR_CONNECTION_TYPE_MAX)
                         continue;
@@ -244,12 +244,12 @@ void MachineManager::buildTopology(const MachineManager& dst) {
 
 static TopologyNode toTopoNode(const CUIDTXprocessor& h) {
     int localId = (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
-                  ? h.gpu.deviceId
+                  ? h.gpu.deviceOrdinal
                   : h.cpu.cpuOrdinal;
-    return TopologyNode(h.rank, h.type, localId);
+    return TopologyNode(h.memberId, h.type, localId);
 }
 
-CUIDTXTopologyConnectionInfo MachineManager::query(
+CUDTXprocessorConnectionInfo MachineManager::query(
         const CUIDTXprocessor& a, const CUIDTXprocessor& b) const {
     TopologyNode ta = toTopoNode(a);
     TopologyNode tb = toTopoNode(b);
@@ -258,10 +258,10 @@ CUIDTXTopologyConnectionInfo MachineManager::query(
     return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
 }
 
-CUIDTXTopologyConnectionInfo queryConnection(
+CUDTXprocessorConnectionInfo queryConnection(
         const std::vector<MachineManager>& managers,
         const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
-    int owner = std::min(a.rank, b.rank);
+    uint32_t owner = std::min(a.memberId, b.memberId);
     if (owner < 0 || owner >= (int)managers.size())
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
     return managers[owner].query(a, b);
@@ -288,7 +288,7 @@ struct GNode {
 
 void MachineManager::print() const {
     printf("  Member %-3u @ %-20s  %d GPU, %d CPU core\n",
-           memberId, hostname_,
+           memberId_, hostname_,
            (int)gpus().size(), (int)cpus().size());
     for (const std::unique_ptr<Processor>& p : gpus()) {
         std::string hl = handleStr(p->publicHandle());
@@ -362,9 +362,9 @@ void printTopology(const std::vector<MachineManager>& managers) {
     const int N = (int)G.size();
 
     /* ---- 2. Build connection info matrix from topology maps ---- */
-    CUIDTXTopologyConnectionInfo defaultConn = {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
-    std::vector<std::vector<CUIDTXTopologyConnectionInfo>> cinfo(
-        N, std::vector<CUIDTXTopologyConnectionInfo>(N, defaultConn));
+    CUDTXprocessorConnectionInfo defaultConn = {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f};
+    std::vector<std::vector<CUDTXprocessorConnectionInfo>> cinfo(
+        N, std::vector<CUDTXprocessorConnectionInfo>(N, defaultConn));
 
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {

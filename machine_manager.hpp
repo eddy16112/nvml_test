@@ -15,14 +15,14 @@ inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
 
 struct MachineManager {
     char hostname_[HOST_SZ];
-    uint32_t memberId;
+    uint32_t memberId_;
 
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
 
     void loadPAL(IProcessorAbstractionLayer &pal);
     void buildTopology(const MachineManager& dst);
 
-    CUIDTXTopologyConnectionInfo query(const CUIDTXprocessor& a,
+    CUDTXprocessorConnectionInfo query(const CUIDTXprocessor& a,
                                        const CUIDTXprocessor& b) const;
 
     const std::vector<std::unique_ptr<Processor>>& gpus() const {
@@ -38,24 +38,24 @@ struct MachineManager {
     }
 
     const ProcessorMap& processors() const { return processors_; }
-    const std::map<TopologyNode::Pair, CUIDTXTopologyConnectionInfo>& topologyMap() const { return topologyMap_; }
+    const std::map<TopologyNode::Pair, CUDTXprocessorConnectionInfo>& topologyMap() const { return topologyMap_; }
 
     void addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p);
-    void addTopologyEntry(const TopologyNode::Pair& pair, const CUIDTXTopologyConnectionInfo& ci);
+    void addTopologyEntry(const TopologyNode::Pair& pair, const CUDTXprocessorConnectionInfo& ci);
     void clearAll();
 
     void print() const;
 
 private:
     ProcessorMap processors_;
-    std::map<TopologyNode::Pair, CUIDTXTopologyConnectionInfo> topologyMap_;
+    std::map<TopologyNode::Pair, CUDTXprocessorConnectionInfo> topologyMap_;
 
-    CUIDTXTopologyConnectionInfo resolveNodeConnection(
+    CUDTXprocessorConnectionInfo resolveNodeConnection(
             const Processor& src, const Processor& dst,
             bool sameNode, const MachineManager& dstMgr) const;
 };
 
-CUIDTXTopologyConnectionInfo queryConnection(
+CUDTXprocessorConnectionInfo queryConnection(
         const std::vector<MachineManager>& managers,
         const CUIDTXprocessor& a,
         const CUIDTXprocessor& b);

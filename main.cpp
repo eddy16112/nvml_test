@@ -52,7 +52,7 @@ struct RankDataWire {
 static void packToWire(const MachineManager& M, RankDataWire& w) {
     memset(&w, 0, sizeof(w));
     strncpy(w.hostname, M.hostname_, HOST_SZ - 1);
-    w.rank = M.memberId;
+    w.rank = M.memberId_;
     w.nNodes = 0;
     for (auto& p : M.gpus()) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
@@ -79,7 +79,7 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
 static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
     strncpy(M.hostname_, w.hostname, HOST_SZ - 1);
     M.hostname_[HOST_SZ - 1] = '\0';
-    M.memberId = w.rank;
+    M.memberId_ = w.rank;
     M.clearAll();
     for (int i = 0; i < w.nNodes; i++) {
         M.addProcessor(w.nodes[i].type,
@@ -89,7 +89,7 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
         const TopoEntryWire& e = w.topoEntries[i];
         TopologyNode src(w.rank, (CUIDTXprocessorType)e.srcType, e.srcLocalId);
         TopologyNode dst(w.rank, (CUIDTXprocessorType)e.dstType, e.dstLocalId);
-        CUIDTXTopologyConnectionInfo ci;
+        CUDTXprocessorConnectionInfo ci;
         ci.type      = (CUDTXprocessorConnectionType)e.connType;
         ci.bandwidth = e.connBandwidth;
         M.addTopologyEntry(canonicalPair(src, dst), ci);
@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
 
     MachineManager local;
     memset(local.hostname_, 0, HOST_SZ);
-    local.memberId = gRank;
+    local.memberId_ = gRank;
     gethostname(local.hostname_, HOST_SZ);
 
     /* Phase 1A – GPU */
@@ -189,19 +189,19 @@ int main(int argc, char** argv) {
     if (gRank == 0 && ws >= 1) {
         printf("\n--- queryConnection Tests ---\n\n");
 
-        auto mkGpu = [](int rank, int devId) -> CUIDTXprocessor {
+        auto mkGpu = [](uint32_t memberId, int devId) -> CUIDTXprocessor {
             CUIDTXprocessor h;
             memset(&h, 0, sizeof(h));
-            h.rank = rank;
+            h.memberId = memberId;
             h.type = CUIDTX_PROCESSOR_TYPE_GPU;
-            h.gpu.deviceId = devId;
+            h.gpu.deviceOrdinal = devId;
             return h;
         };
 
-        auto mkCpu = [](int rank, int cpuOrdinal) -> CUIDTXprocessor {
+        auto mkCpu = [](uint32_t memberId, int cpuOrdinal) -> CUIDTXprocessor {
             CUIDTXprocessor h;
             memset(&h, 0, sizeof(h));
-            h.rank = rank;
+            h.memberId = memberId;
             h.type = CUIDTX_PROCESSOR_TYPE_CPU;
             h.cpu.cpuOrdinal = cpuOrdinal;
             return h;
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
 
         auto printTest = [&](const char* label,
                              const CUIDTXprocessor& src, const CUIDTXprocessor& dst) {
-            CUIDTXTopologyConnectionInfo ci = queryConnection(managers, src, dst);
+            CUDTXprocessorConnectionInfo ci = queryConnection(managers, src, dst);
             std::string tag = connInfoStr(ci);
             printf("  %-20s  (%s -> %s) = %s\n",
                    label,

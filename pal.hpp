@@ -67,10 +67,10 @@ typedef enum CUDTXprocessorConnectionType_enum {
     CUDTX_PROCESSOR_CONNECTION_TYPE_MAX = 0x7FFFFFFF
 } CUDTXprocessorConnectionType;
 
-typedef struct CUIDTXTopologyConnectionInfo_st {
+typedef struct CUDTXprocessorConnectionInfo_st {
     CUDTXprocessorConnectionType type;
     float bandwidth; // GB/s, -1 if unknown/not applicable
-} CUIDTXTopologyConnectionInfo;
+} CUDTXprocessorConnectionInfo;
 
 inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
     switch (t) {
@@ -86,7 +86,7 @@ inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
     }
 }
 
-inline std::string connInfoStr(const CUIDTXTopologyConnectionInfo& c) {
+inline std::string connInfoStr(const CUDTXprocessorConnectionInfo& c) {
     std::string s = connTypeTag(c.type);
     if (c.bandwidth >= 0)
         s += "(" + std::to_string((int)c.bandwidth) + ")";
@@ -137,10 +137,10 @@ enum CUIDTXprocessorType : uint8_t {
 };
 
 struct CUIDTXprocessor {
-    int rank;
+    uint32_t memberId;
     union {
-        struct { int deviceId; } gpu;
-        struct { int cpuOrdinal;  } cpu;
+        struct { CUdevice deviceOrdinal; } gpu;
+        struct { int32_t cpuOrdinal;  } cpu;
     };
     CUIDTXprocessorType type;
 };
@@ -214,11 +214,11 @@ public:
     , topologyNode_(memberId, info.type, info)
     {
         std::memset(&handle_, 0, sizeof(handle_));
-        handle_.rank = memberId;
+        handle_.memberId = memberId;
         handle_.type = info.type;
         switch (info.type) {
             case CUIDTX_PROCESSOR_TYPE_GPU:
-                handle_.gpu.deviceId = static_cast<int>(info.gpu.deviceOrdinal);
+                handle_.gpu.deviceOrdinal = info.gpu.deviceOrdinal;
                 break;
             case CUIDTX_PROCESSOR_TYPE_CPU: handle_.cpu.cpuOrdinal = info.cpu.cpuOrdinal; break;
             default: break;
@@ -241,8 +241,8 @@ private:
 
 inline std::string handleStr(const CUIDTXprocessor& h) {
     if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
-        return "GPU(" + std::to_string(h.rank) + "," + std::to_string(h.gpu.deviceId) + ")";
-    return "CPU(" + std::to_string(h.rank) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
+        return "GPU(" + std::to_string(h.memberId) + "," + std::to_string(h.gpu.deviceOrdinal) + ")";
+    return "CPU(" + std::to_string(h.memberId) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
 }
 
 /* ==================================================================
