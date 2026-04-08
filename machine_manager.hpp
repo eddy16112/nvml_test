@@ -44,7 +44,7 @@ struct MachineManager {
     void addTopologyEntry(const TopologyNode::Pair& pair, const CUIDTXTopologyConnectionInfo& ci);
     void clearAll();
 
-    void print(int index) const;
+    void print() const;
 
 private:
     ProcessorMap processors_;

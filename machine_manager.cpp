@@ -222,7 +222,7 @@ void MachineManager::buildTopology(const MachineManager& dst) {
             for (auto& [dstType, dstVec] : dst.processors_) {
                 for (auto& dstProc : dstVec) {
                     TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode_, dstProc->topologyNode_);
-                    if (nodePair.first.rank != memberId)
+                    if (nodePair.first.memberId != memberId)
                         continue;
                     if (topologyMap_.count(nodePair))
                         continue;
@@ -286,9 +286,9 @@ struct GNode {
     }
 };
 
-void MachineManager::print(int index) const {
-    printf("  Rank %-3d @ %-20s  %d GPU, %d CPU core\n",
-           index, hostname_,
+void MachineManager::print() const {
+    printf("  Member %-3u @ %-20s  %d GPU, %d CPU core\n",
+           memberId, hostname_,
            (int)gpus().size(), (int)cpus().size());
     for (const std::unique_ptr<Processor>& p : gpus()) {
         std::string hl = handleStr(p->handle_);
@@ -303,6 +303,14 @@ void MachineManager::print(int index) const {
         std::string hl = handleStr(p->handle_);
         printf("    %-12s  NUMA %d  os_index %u\n",
                hl.c_str(), p->info_.numaId, p->info_.cpu.osIndex);
+    }
+    printf("\n  Topology (%zu entries):\n", topologyMap_.size());
+    for (const auto& [pair, ci] : topologyMap_) {
+        std::string tag = connInfoStr(ci);
+        printf("    %s <-> %s : %s\n",
+               topoNodeStr(pair.first).c_str(),
+               topoNodeStr(pair.second).c_str(),
+               tag.c_str());
     }
 }
 
@@ -362,7 +370,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
         for (int j = 0; j < N; j++) {
             if (i == j) continue;
             TopologyNode::Pair nodePair = canonicalPair(G[i].tnode, G[j].tnode);
-            int owner = nodePair.first.rank;
+            int owner = nodePair.first.memberId;
             auto it = managers[owner].topologyMap().find(nodePair);
             if (it != managers[owner].topologyMap().end())
                 cinfo[i][j] = it->second;
@@ -385,11 +393,6 @@ void printTopology(const std::vector<MachineManager>& managers) {
     printf("  %d rank(s),  %d GPU(s),  %d CPU NUMA node(s)\n", ws, nGpus, nCpus);
     printf("  (mode: pre-collected data only)\n");
 
-    /* ---- Per-Rank Assignment ---- */
-    printf("\n--- Per-Rank Assignment ---\n\n");
-    for (int r = 0; r < ws; r++)
-        managers[r].print(r);
-
     /* ---- All Unique Nodes ---- */
     printf("\n--- All Unique Nodes (%d GPU, %d CPU NUMA) ---\n\n", nGpus, nCpus);
     for (int i = 0; i < N; i++) {
@@ -410,19 +413,10 @@ void printTopology(const std::vector<MachineManager>& managers) {
         printf("\n");
     }
 
-    /* ---- Per-Manager Topology Maps ---- */
-    printf("\n--- Per-Manager Topology Maps ---\n");
+    /* ---- Per-Manager Details ---- */
+    printf("\n--- Per-Manager Details ---\n");
     for (int r = 0; r < ws; r++) {
-        const auto& M = managers[r];
-        printf("\n  Manager[%d] @ %s  (%zu entries)\n",
-               r, M.hostname_, M.topologyMap().size());
-        for (const auto& [pair, ci] : M.topologyMap()) {
-            std::string tag = connInfoStr(ci);
-            printf("    %s <-> %s : %s\n",
-                   topoNodeStr(pair.first).c_str(),
-                   topoNodeStr(pair.second).c_str(),
-                   tag.c_str());
-        }
+        managers[r].print();
     }
 
     /* ---- Topology Matrix ---- */

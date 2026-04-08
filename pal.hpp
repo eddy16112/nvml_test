@@ -156,12 +156,12 @@ struct ProcessorInfo {
 
 struct TopologyNode
 {
-    int rank;
+    uint32_t memberId;
     CUIDTXprocessorType type;
     int localId; // GPU: deviceId, CPU: numaId
 
-    TopologyNode(int rank, CUIDTXprocessorType type, const ProcessorInfo &info)
-    : rank(rank)
+    TopologyNode(uint32_t memberId, CUIDTXprocessorType type, const ProcessorInfo &info)
+    : memberId(memberId)
     , type(type)
     {
         switch (info.type) {
@@ -175,25 +175,25 @@ struct TopologyNode
         }
     }
 
-    TopologyNode(int rank, CUIDTXprocessorType type, int localId)
-        : rank(rank)
+    TopologyNode(uint32_t memberId, CUIDTXprocessorType type, int localId)
+        : memberId(memberId)
         , type(type)
         , localId(localId)
     {
     }
 
-    TopologyNode() : rank(-1), type(CUIDTX_PROCESSOR_TYPE_MAX), localId(-1) {}
+    TopologyNode() : memberId(UINT32_MAX), type(CUIDTX_PROCESSOR_TYPE_MAX), localId(-1) {}
 
     using Pair = std::pair<TopologyNode, TopologyNode>;
 
     bool operator<(const TopologyNode& rhs) const noexcept {
-        if (rank != rhs.rank) return rank < rhs.rank;
+        if (memberId != rhs.memberId) return memberId < rhs.memberId;
         if (type != rhs.type) return type < rhs.type;
         return localId < rhs.localId;
     }
 
     bool operator==(const TopologyNode& rhs) const noexcept {
-        return rank == rhs.rank && type == rhs.type && localId == rhs.localId;
+        return memberId == rhs.memberId && type == rhs.type && localId == rhs.localId;
     }
 
     bool operator!=(const TopologyNode& rhs) const noexcept {
@@ -203,18 +203,18 @@ struct TopologyNode
 
 inline std::string topoNodeStr(const TopologyNode& n) {
     if (n.type == CUIDTX_PROCESSOR_TYPE_GPU)
-        return "GPU(" + std::to_string(n.rank) + "," + std::to_string(n.localId) + ")";
-    return "CPU(" + std::to_string(n.rank) + "," + std::to_string(n.localId) + ")";
+        return "GPU(" + std::to_string(n.memberId) + "," + std::to_string(n.localId) + ")";
+    return "CPU(" + std::to_string(n.memberId) + "," + std::to_string(n.localId) + ")";
 }
 
 class Processor {
 public:
-    Processor(const ProcessorInfo &info, int rank)
+    Processor(const ProcessorInfo &info, uint32_t memberId)
     : info_(info)
-    , topologyNode_(rank, info.type, info)
+    , topologyNode_(memberId, info.type, info)
     {
         std::memset(&handle_, 0, sizeof(handle_));
-        handle_.rank = rank;
+        handle_.rank = memberId;
         handle_.type = info.type;
         switch (info.type) {
             case CUIDTX_PROCESSOR_TYPE_GPU:
