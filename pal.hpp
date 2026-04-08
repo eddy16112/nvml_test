@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda.h>
+#include <nvml.h>
 
 #include <cstdint>
 #include <cstring>
@@ -98,6 +99,7 @@ inline std::string connInfoStr(const CUIDTXTopologyConnectionInfo& c) {
 
 struct NvLinkPeer {
     char remoteBusId[BUSID_SZ];
+    nvmlIntNvLinkDeviceType_t remoteDeviceType;
 };
 
 struct PCIEPeer {

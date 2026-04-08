@@ -38,52 +38,29 @@ static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
     }
 }
 
-static std::vector<std::string> getNvLinkPeers(const GPUInfo& gi) {
-    std::vector<std::string> peers;
-    for (int k = 0; k < gi.nNvLinks; k++)
-        peers.emplace_back(gi.nvLinks[k].remoteBusId);
-    return peers;
-}
-
-// NVLink peers are always local devices. A direct GPU-to-GPU NVLink
-// can only exist on the same node, so skip the search for cross-node pairs.
-static int countNvLinksByBusId(const GPUInfo& gi, const char* peerBusId,
-                               bool sameNode) {
+// Direct GPU-to-GPU NVLink can only exist on the same node.
+static int countDirectNvLinks(const GPUInfo& gi, const char* peerBusId,
+                              bool sameNode) {
     if (!sameNode) return 0;
     int n = 0;
-    for (auto& remote : getNvLinkPeers(gi))
-        if (sameBus(remote.c_str(), peerBusId)) n++;
+    for (int k = 0; k < gi.nNvLinks; k++)
+        if (gi.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_GPU &&
+            sameBus(gi.nvLinks[k].remoteBusId, peerBusId))
+            n++;
     return n;
 }
 
-// NVLink peers are local devices. To tell GPUs from NVSwitches we only
-// compare against GPUs on the SAME node (identified by hostname), avoiding
-// false matches when different nodes have identical GPU bus IDs.
-// NVSwitch bus ID keys are NOT prefixed with hostname because NVSwitch
-// ASICs are physically shared across compute trays on systems like NVL72;
-// two GPUs on different nodes that connect to the same NVSwitch will
-// report the same NVSwitch bus ID, and that match is intentional.
-static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst,
-                              const std::vector<std::unique_ptr<Processor>>& srcGpus,
-                              const std::vector<std::unique_ptr<Processor>>& dstGpus) 
-{
-    auto isGpuInList = [](const char* bid, const std::vector<std::unique_ptr<Processor>>& gpus) -> bool 
-    {
-        for (const std::unique_ptr<Processor>& p : gpus) {
-            if (sameBus(bid, p->info_.gpu.busId)) {
-                return true;
-            }
-        }
-        return false;
-    };
-
+// Count NVLink connections routed through shared NVSwitches.
+// Two GPUs on different nodes can share the same physical NVSwitch
+// (e.g. NVL72), so cross-node NVSwitch matches are intentional.
+static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
     std::map<std::string, int> swSrc, swDst;
-    for (const std::string& remote : getNvLinkPeers(src))
-        if (!isGpuInList(remote.c_str(), srcGpus))
-            swSrc[busKey(remote.c_str())]++;
-    for (const std::string& remote : getNvLinkPeers(dst))
-        if (!isGpuInList(remote.c_str(), dstGpus))
-            swDst[busKey(remote.c_str())]++;
+    for (int k = 0; k < src.nNvLinks; k++)
+        if (src.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)
+            swSrc[busKey(src.nvLinks[k].remoteBusId)]++;
+    for (int k = 0; k < dst.nNvLinks; k++)
+        if (dst.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)
+            swDst[busKey(dst.nvLinks[k].remoteBusId)]++;
 
     int n = 0;
     for (const std::pair<const std::string, int>& kv : swSrc)
@@ -122,10 +99,7 @@ static CUIDTXTopologyConnectionInfo resolvePcie(const GPUInfo& gi,
 //  5. Same node, PCIe topology                       → PIX/PXB/PHB/NODE/SYS
 static CUIDTXTopologyConnectionInfo resolveGpuGpu(
         const GPUInfo& src, const GPUInfo& dst,
-        bool sameNode,
-        const std::vector<std::unique_ptr<Processor>>& srcGpus,
-        const std::vector<std::unique_ptr<Processor>>& dstGpus) 
-{
+        bool sameNode) {
 
     printf("  [resolveGpuGpu] src=%s (uuid=%.40s) ↔ dst=%s (uuid=%.40s) sameNode=%d\n",
            src.busId, src.uuid, dst.busId, dst.uuid, sameNode);
@@ -138,13 +112,13 @@ static CUIDTXTopologyConnectionInfo resolveGpuGpu(
         return (perLink >= 0) ? linkCount * perLink : -1.0f;
     };
 
-    int nvl = countNvLinksByBusId(src, dst.busId, sameNode);
+    int nvl = countDirectNvLinks(src, dst.busId, sameNode);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, nvlinkBw(nvl)};
     }
 
-    int nvs = countNvSwitchLinks(src, dst, srcGpus, dstGpus);
+    int nvs = countNvSwitchLinks(src, dst);
     if (nvs > 0) {
         printf("    → NVSwitch = %d\n", nvs);
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, nvlinkBw(nvs)};
@@ -196,7 +170,7 @@ CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
     CUIDTXprocessorType dt = dst.handle_.type;
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode, gpus(), dstMgr.gpus());
+        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode);
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
         return resolveGpuCpu(src.info_, dst.info_, sameNode);

@@ -186,6 +186,11 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 if (lcnt >= MAX_LINKS)
                     break;
                 strncpy(gpuInfo.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
+
+                gpuInfo.nvLinks[lcnt].remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+                nvmlDeviceGetNvLinkRemoteDeviceType(hDev, l,
+                    &gpuInfo.nvLinks[lcnt].remoteDeviceType);
+                assert(gpuInfo.nvLinks[lcnt].remoteDeviceType != NVML_NVLINK_DEVICE_TYPE_UNKNOWN);
                 lcnt++;
             }
             gpuInfo.nNvLinks = lcnt;
