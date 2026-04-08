@@ -1,7 +1,6 @@
 #include "pal.hpp"
 
 #include <cstdio>
-#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
@@ -59,19 +58,21 @@ static std::string cuUuidToStr(const CUuuid& u) {
 std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     std::vector<ProcessorInfo> infos;
 
-    unsigned int nAllDev = 0;
-    PAL_CHK_NVML(nvmlDeviceGetCount_v2(&nAllDev));
-    int nAll = static_cast<int>(nAllDev);
+    unsigned int nAll = 0;
+    PAL_CHK_NVML(nvmlDeviceGetCount_v2(&nAll));
 
-    std::vector<nvmlDevice_t> hAll(nAll);
-    std::vector<std::array<char, BUSID_SZ>> allBusIds((size_t)nAll);
-    std::vector<std::array<char, UUID_SZ>>  allUuids((size_t)nAll);
-    for (int i = 0; i < nAll; i++) {
-        PAL_CHK_NVML(nvmlDeviceGetHandleByIndex_v2(i, &hAll[i]));
+    struct NvmlDeviceInfo {
+        nvmlDevice_t handle;
+        char busId[BUSID_SZ];
+        char uuid[UUID_SZ];
+    };
+    std::vector<NvmlDeviceInfo> allDevs(nAll);
+    for (unsigned int i = 0; i < nAll; i++) {
+        PAL_CHK_NVML(nvmlDeviceGetHandleByIndex_v2(i, &allDevs[i].handle));
         nvmlPciInfo_t pci;
-        PAL_CHK_NVML(nvmlDeviceGetPciInfo_v3(hAll[i], &pci));
-        strncpy(allBusIds[i].data(), pci.busId, BUSID_SZ - 1);
-        PAL_CHK_NVML(nvmlDeviceGetUUID(hAll[i], allUuids[i].data(), UUID_SZ));
+        PAL_CHK_NVML(nvmlDeviceGetPciInfo_v3(allDevs[i].handle, &pci));
+        strncpy(allDevs[i].busId, pci.busId, BUSID_SZ - 1);
+        PAL_CHK_NVML(nvmlDeviceGetUUID(allDevs[i].handle, allDevs[i].uuid, UUID_SZ));
     }
 
     int nGpus = 0;
@@ -94,12 +95,12 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         PAL_CHK_CU(cuDeviceGetUuid_v2(&cuUuid, cuDevice));
         std::string cudaUuid = cuUuidToStr(cuUuid);
 
-        for (int k = 0; k < nAll; k++) {
-            if (cudaUuid != allUuids[k].data()) continue;
-            nvmlDevice_t hDev = hAll[k];
+        for (unsigned int k = 0; k < nAll; k++) {
+            if (cudaUuid != allDevs[k].uuid) continue;
+            nvmlDevice_t hDev = allDevs[k].handle;
 
-            strncpy(gpuInfo.uuid, allUuids[k].data(), UUID_SZ - 1);
-            strncpy(gpuInfo.busId, allBusIds[k].data(), BUSID_SZ - 1);
+            strncpy(gpuInfo.uuid, allDevs[k].uuid, UUID_SZ - 1);
+            strncpy(gpuInfo.busId, allDevs[k].busId, BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
             nvmlC2cModeInfo_v1_t c2cInfo{};
@@ -175,18 +176,18 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             gpuInfo.nNvLinks = lcnt;
 
             gpuInfo.nPcies = 0;
-            for (int p = 0; p < nAll; p++) {
+            for (unsigned int p = 0; p < nAll; p++) {
                 if (p == k) continue;
                 if (gpuInfo.nPcies >= MAX_GPUS)
                     break;
                 PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
-                strncpy(peer.busId, allBusIds[p].data(), BUSID_SZ - 1);
+                strncpy(peer.busId, allDevs[p].busId, BUSID_SZ - 1);
                 nvmlGpuTopologyLevel_t lvl;
-                nvmlReturn_t r2 = nvmlDeviceGetTopologyCommonAncestor(hDev, hAll[p], &lvl);
+                nvmlReturn_t r2 = nvmlDeviceGetTopologyCommonAncestor(hDev, allDevs[p].handle, &lvl);
                 peer.nvmlTopoLevel = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
 
                 nvmlGpuP2PStatus_t p2pStatus = NVML_P2P_STATUS_NOT_SUPPORTED;
-                nvmlReturn_t r3 = nvmlDeviceGetP2PStatus(hDev, hAll[p],
+                nvmlReturn_t r3 = nvmlDeviceGetP2PStatus(hDev, allDevs[p].handle,
                     NVML_P2P_CAPS_INDEX_ATOMICS, &p2pStatus);
                 peer.atomicsSupported = (r3 == NVML_SUCCESS &&
                                          p2pStatus == NVML_P2P_STATUS_OK);
@@ -195,8 +196,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
             break;
         }
-
-        printf("enumerateProcessors: GPU %d, nNvLinks=%d, nPcies=%d\n", ci, info.gpu.nNvLinks, info.gpu.nPcies);
 
         infos.push_back(info);
     }
