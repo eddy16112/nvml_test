@@ -14,8 +14,8 @@ inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
 }
 
 struct MachineManager {
-    char hostname[HOST_SZ];
-    int  rank;
+    char hostname_[HOST_SZ];
+    uint32_t memberId;
 
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
     ProcessorMap processors_;

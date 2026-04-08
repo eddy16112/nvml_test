@@ -51,8 +51,8 @@ struct RankDataWire {
 
 static void packToWire(const MachineManager& M, RankDataWire& w) {
     memset(&w, 0, sizeof(w));
-    strncpy(w.hostname, M.hostname, HOST_SZ - 1);
-    w.rank = M.rank;
+    strncpy(w.hostname, M.hostname_, HOST_SZ - 1);
+    w.rank = M.memberId;
     w.nNodes = 0;
     for (auto& p : M.gpus()) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
@@ -77,9 +77,9 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
 }
 
 static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
-    strncpy(M.hostname, w.hostname, HOST_SZ - 1);
-    M.hostname[HOST_SZ - 1] = '\0';
-    M.rank = w.rank;
+    strncpy(M.hostname_, w.hostname, HOST_SZ - 1);
+    M.hostname_[HOST_SZ - 1] = '\0';
+    M.memberId = w.rank;
     M.processors_.clear();
     for (int i = 0; i < w.nNodes; i++) {
         M.processors_[w.nodes[i].type].emplace_back(
@@ -123,12 +123,12 @@ int main(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &ws);
 
     MachineManager local;
-    memset(local.hostname, 0, HOST_SZ);
-    local.rank = gRank;
-    gethostname(local.hostname, HOST_SZ);
+    memset(local.hostname_, 0, HOST_SZ);
+    local.memberId = gRank;
+    gethostname(local.hostname_, HOST_SZ);
 
     /* Phase 1A – GPU */
-    fprintf(stderr, "[R%d@%s] Phase 1A start\n", gRank, local.hostname);
+    fprintf(stderr, "[R%d@%s] Phase 1A start\n", gRank, local.hostname_);
     fflush(stderr);
     if (gRank == 0)
         printf("[Phase 1A] Collecting local GPU data (CudaPAL) ...\n");
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
         local.loadPAL(gpuPal);
     }
     fprintf(stderr, "[R%d@%s] Phase 1A done, %d GPUs\n",
-            gRank, local.hostname, (int)local.gpus().size());
+            gRank, local.hostname_, (int)local.gpus().size());
     fflush(stderr);
 
     /* Phase 1B – CPU */
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
         local.loadPAL(cpuPal);
     }
     fprintf(stderr, "[R%d@%s] Phase 1B done, %d CPUs\n",
-            gRank, local.hostname, (int)local.cpus().size());
+            gRank, local.hostname_, (int)local.cpus().size());
     fflush(stderr);
 
     /* Phase 1C – local topology (intra-rank, parallel across all ranks) */
@@ -156,10 +156,10 @@ int main(int argc, char** argv) {
         printf("[Phase 1C] Building local topology ...\n");
     local.buildTopology(local);
     fprintf(stderr, "[R%d@%s] Phase 1C done, %zu local topology entries. Entering barrier...\n",
-            gRank, local.hostname, local.topology.size());
+            gRank, local.hostname_, local.topology.size());
     fflush(stderr);
     MPI_Barrier(MPI_COMM_WORLD);
-    fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, local.hostname);
+    fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, local.hostname_);
     fflush(stderr);
 
     /* Phase 2 */

@@ -18,7 +18,7 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
     assert(processors.empty());
     processors.reserve(processorInfos.size());
     for (const ProcessorInfo &info : processorInfos) {
-        processors.emplace_back(std::make_unique<Processor>(info, rank));
+        processors.emplace_back(std::make_unique<Processor>(info, memberId));
     }
 }
 
@@ -186,14 +186,14 @@ CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
  * ================================================================== */
 
 void MachineManager::buildTopology(const MachineManager& dst) {
-    bool sameNode = (std::string(dst.hostname) == std::string(hostname));
+    bool sameNode = (std::string(dst.hostname_) == std::string(hostname_));
 
     for (auto& [srcType, srcVec] : processors_) {
         for (auto& srcProc : srcVec) {
             for (auto& [dstType, dstVec] : dst.processors_) {
                 for (auto& dstProc : dstVec) {
                     TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode_, dstProc->topologyNode_);
-                    if (nodePair.first.rank != rank)
+                    if (nodePair.first.rank != memberId)
                         continue;
                     if (topology.count(nodePair))
                         continue;
@@ -270,7 +270,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
             for (auto& np : pvec) {
                 GNode gn;
                 gn.tnode  = np->topologyNode_;
-                gn.host   = M.hostname;
+                gn.host   = M.hostname_;
 
                 if (gn.isGpu()) {
                     const GPUInfo& gi = np->info_.gpu;
@@ -341,7 +341,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     for (int r = 0; r < ws; r++) {
         const MachineManager& M = managers[r];
         printf("  Rank %-3d @ %-20s  %d GPU, %d CPU core\n",
-               r, M.hostname,
+               r, M.hostname_,
                (int)M.gpus().size(), (int)M.cpus().size());
         for (auto& p : M.gpus()) {
             std::string hl = handleStr(p->handle_);
@@ -384,7 +384,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     for (int r = 0; r < ws; r++) {
         const auto& M = managers[r];
         printf("\n  Manager[%d] @ %s  (%zu entries)\n",
-               r, M.hostname, M.topology.size());
+               r, M.hostname_, M.topology.size());
         for (auto& [pair, ci] : M.topology) {
             std::string tag = connInfoStr(ci);
             printf("    %s <-> %s : %s\n",
