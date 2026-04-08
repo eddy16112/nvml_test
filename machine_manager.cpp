@@ -26,6 +26,21 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
  *  Helpers
  * ================================================================== */
 
+inline std::string busKey(const char* id) 
+{
+    std::string s(id);
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    auto p = s.find(':');
+    if (p != std::string::npos && p < 8)
+        s = std::string(8 - p, '0') + s;
+    return s;
+}
+
+inline bool sameBus(const char* a, const char* b) 
+{
+    return busKey(a) == busKey(b);
+}
+
 static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
     switch (t) {
         case 0:  return CUDTX_PROCESSOR_CONNECTION_TYPE_SELF;
@@ -195,14 +210,14 @@ void MachineManager::buildTopology(const MachineManager& dst) {
                     TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode_, dstProc->topologyNode_);
                     if (nodePair.first.rank != memberId)
                         continue;
-                    if (topology.count(nodePair))
+                    if (topologyMap_.count(nodePair))
                         continue;
 
                     CUIDTXTopologyConnectionInfo ci = resolveNodeConnection(
                         *srcProc, *dstProc, sameNode, dst);
                     if (ci.type == CUDTX_PROCESSOR_CONNECTION_TYPE_MAX)
                         continue;
-                    topology[nodePair] = ci;
+                    topologyMap_[nodePair] = ci;
                 }
             }
         }
@@ -224,8 +239,8 @@ CUIDTXTopologyConnectionInfo MachineManager::query(
         const CUIDTXprocessor& a, const CUIDTXprocessor& b) const {
     TopologyNode ta = toTopoNode(a);
     TopologyNode tb = toTopoNode(b);
-    auto it = topology.find(canonicalPair(ta, tb));
-    if (it != topology.end()) return it->second;
+    auto it = topologyMap_.find(canonicalPair(ta, tb));
+    if (it != topologyMap_.end()) return it->second;
     return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
 }
 
@@ -314,8 +329,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
             if (i == j) continue;
             TopologyNode::Pair nodePair = canonicalPair(G[i].tnode, G[j].tnode);
             int owner = nodePair.first.rank;
-            auto it = managers[owner].topology.find(nodePair);
-            if (it != managers[owner].topology.end())
+            auto it = managers[owner].topologyMap_.find(nodePair);
+            if (it != managers[owner].topologyMap_.end())
                 cinfo[i][j] = it->second;
             else
                 cinfo[i][j] = {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
@@ -384,8 +399,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
     for (int r = 0; r < ws; r++) {
         const auto& M = managers[r];
         printf("\n  Manager[%d] @ %s  (%zu entries)\n",
-               r, M.hostname_, M.topology.size());
-        for (auto& [pair, ci] : M.topology) {
+               r, M.hostname_, M.topologyMap_.size());
+        for (auto& [pair, ci] : M.topologyMap_) {
             std::string tag = connInfoStr(ci);
             printf("    %s <-> %s : %s\n",
                    topoNodeStr(pair.first).c_str(),

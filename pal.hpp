@@ -67,7 +67,7 @@ typedef enum CUDTXprocessorConnectionType_enum {
     CUDTX_PROCESSOR_CONNECTION_TYPE_MAX = 0x7FFFFFFF
 } CUDTXprocessorConnectionType;
 
-typedef struct CUDTXprocessorConnectionInfo_st {
+typedef struct CUIDTXTopologyConnectionInfo_st {
     CUDTXprocessorConnectionType type;
     float bandwidth; // GB/s, -1 if unknown/not applicable
 } CUIDTXTopologyConnectionInfo;
@@ -238,19 +238,6 @@ inline std::string handleStr(const CUIDTXprocessor& h) {
     if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
         return "GPU(" + std::to_string(h.rank) + "," + std::to_string(h.gpu.deviceId) + ")";
     return "CPU(" + std::to_string(h.rank) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
-}
-
-inline std::string busKey(const char* id) {
-    std::string s(id);
-    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
-    auto p = s.find(':');
-    if (p != std::string::npos && p < 8)
-        s = std::string(8 - p, '0') + s;
-    return s;
-}
-
-inline bool sameBus(const char* a, const char* b) {
-    return busKey(a) == busKey(b);
 }
 
 /* ==================================================================

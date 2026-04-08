@@ -63,7 +63,7 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
         w.nodes[w.nNodes++] = p->info_;
     }
     w.nTopoEntries = 0;
-    for (auto& [pair, ci] : M.topology) {
+    for (auto& [pair, ci] : M.topologyMap_) {
         if (w.nTopoEntries >= MAX_TOPO_PAIRS) break;
         TopoEntryWire& e = w.topoEntries[w.nTopoEntries];
         e.srcType       = pair.first.type;
@@ -85,7 +85,7 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
         M.processors_[w.nodes[i].type].emplace_back(
             std::make_unique<Processor>(w.nodes[i], w.rank));
     }
-    M.topology.clear();
+    M.topologyMap_.clear();
     for (int i = 0; i < w.nTopoEntries; i++) {
         const TopoEntryWire& e = w.topoEntries[i];
         TopologyNode src(w.rank, (CUIDTXprocessorType)e.srcType, e.srcLocalId);
@@ -93,7 +93,7 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
         CUIDTXTopologyConnectionInfo ci;
         ci.type      = (CUDTXprocessorConnectionType)e.connType;
         ci.bandwidth = e.connBandwidth;
-        M.topology[canonicalPair(src, dst)] = ci;
+        M.topologyMap_[canonicalPair(src, dst)] = ci;
     }
 }
 
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
         printf("[Phase 1C] Building local topology ...\n");
     local.buildTopology(local);
     fprintf(stderr, "[R%d@%s] Phase 1C done, %zu local topology entries. Entering barrier...\n",
-            gRank, local.hostname_, local.topology.size());
+            gRank, local.hostname_, local.topologyMap_.size());
     fflush(stderr);
     MPI_Barrier(MPI_COMM_WORLD);
     fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, local.hostname_);

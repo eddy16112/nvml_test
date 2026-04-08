@@ -20,7 +20,7 @@ struct MachineManager {
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
     ProcessorMap processors_;
 
-    std::map<TopologyNode::Pair, CUIDTXTopologyConnectionInfo> topology;
+    std::map<TopologyNode::Pair, CUIDTXTopologyConnectionInfo> topologyMap_;
 
     // Load processors from a PAL
     void loadPAL(IProcessorAbstractionLayer &pal);
