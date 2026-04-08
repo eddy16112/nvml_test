@@ -22,6 +22,20 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
     }
 }
 
+void MachineManager::addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p) {
+    processors_[type].emplace_back(std::move(p));
+}
+
+void MachineManager::addTopologyEntry(const TopologyNode::Pair& pair,
+                                      const CUIDTXTopologyConnectionInfo& ci) {
+    topologyMap_[pair] = ci;
+}
+
+void MachineManager::clearAll() {
+    processors_.clear();
+    topologyMap_.clear();
+}
+
 /* ==================================================================
  *  Helpers
  * ================================================================== */
@@ -272,6 +286,26 @@ struct GNode {
     }
 };
 
+void MachineManager::print(int index) const {
+    printf("  Rank %-3d @ %-20s  %d GPU, %d CPU core\n",
+           index, hostname_,
+           (int)gpus().size(), (int)cpus().size());
+    for (const std::unique_ptr<Processor>& p : gpus()) {
+        std::string hl = handleStr(p->handle_);
+        const GPUInfo& gi = p->info_.gpu;
+        printf("    %-12s  %s [%s]",
+               hl.c_str(), gi.busId, gi.name);
+        if (p->info_.numaId >= 0)
+            printf(" NUMA:%d", p->info_.numaId);
+        printf("\n");
+    }
+    for (const std::unique_ptr<Processor>& p : cpus()) {
+        std::string hl = handleStr(p->handle_);
+        printf("    %-12s  NUMA %d  os_index %u\n",
+               hl.c_str(), p->info_.numaId, p->info_.cpu.osIndex);
+    }
+}
+
 void printTopology(const std::vector<MachineManager>& managers) {
     const int ws = (int)managers.size();
 
@@ -281,7 +315,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
 
     for (int r = 0; r < ws; r++) {
         const MachineManager& M = managers[r];
-        for (auto& [type, pvec] : M.processors_) {
+        for (const auto& [type, pvec] : M.processors()) {
             for (auto& np : pvec) {
                 GNode gn;
                 gn.tnode  = np->topologyNode_;
@@ -329,8 +363,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
             if (i == j) continue;
             TopologyNode::Pair nodePair = canonicalPair(G[i].tnode, G[j].tnode);
             int owner = nodePair.first.rank;
-            auto it = managers[owner].topologyMap_.find(nodePair);
-            if (it != managers[owner].topologyMap_.end())
+            auto it = managers[owner].topologyMap().find(nodePair);
+            if (it != managers[owner].topologyMap().end())
                 cinfo[i][j] = it->second;
             else
                 cinfo[i][j] = {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f};
@@ -353,26 +387,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
 
     /* ---- Per-Rank Assignment ---- */
     printf("\n--- Per-Rank Assignment ---\n\n");
-    for (int r = 0; r < ws; r++) {
-        const MachineManager& M = managers[r];
-        printf("  Rank %-3d @ %-20s  %d GPU, %d CPU core\n",
-               r, M.hostname_,
-               (int)M.gpus().size(), (int)M.cpus().size());
-        for (auto& p : M.gpus()) {
-            std::string hl = handleStr(p->handle_);
-            const GPUInfo& gi = p->info_.gpu;
-            printf("    %-12s  %s [%s]",
-                   hl.c_str(), gi.busId, gi.name);
-            if (p->info_.numaId >= 0)
-                printf(" NUMA:%d", p->info_.numaId);
-            printf("\n");
-        }
-        for (auto& p : M.cpus()) {
-            std::string hl = handleStr(p->handle_);
-            printf("    %-12s  NUMA %d  os_index %u\n",
-                   hl.c_str(), p->info_.numaId, p->info_.cpu.osIndex);
-        }
-    }
+    for (int r = 0; r < ws; r++)
+        managers[r].print(r);
 
     /* ---- All Unique Nodes ---- */
     printf("\n--- All Unique Nodes (%d GPU, %d CPU NUMA) ---\n\n", nGpus, nCpus);
@@ -399,8 +415,8 @@ void printTopology(const std::vector<MachineManager>& managers) {
     for (int r = 0; r < ws; r++) {
         const auto& M = managers[r];
         printf("\n  Manager[%d] @ %s  (%zu entries)\n",
-               r, M.hostname_, M.topologyMap_.size());
-        for (auto& [pair, ci] : M.topologyMap_) {
+               r, M.hostname_, M.topologyMap().size());
+        for (const auto& [pair, ci] : M.topologyMap()) {
             std::string tag = connInfoStr(ci);
             printf("    %s <-> %s : %s\n",
                    topoNodeStr(pair.first).c_str(),
