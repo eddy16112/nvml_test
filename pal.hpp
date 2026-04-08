@@ -225,6 +225,11 @@ public:
         }
     }
 
+    const CUIDTXprocessor& publicHandle() const { return handle_; }
+    const ProcessorInfo& info() const { return info_; }
+    const TopologyNode& topologyNode() const { return topologyNode_; }
+
+private:
     CUIDTXprocessor handle_ {};
     ProcessorInfo info_ {};
     TopologyNode topologyNode_;

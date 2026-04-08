@@ -195,19 +195,19 @@ CUIDTXTopologyConnectionInfo MachineManager::resolveNodeConnection(
         const Processor& src, const Processor& dst,
         bool sameNode, const MachineManager& dstMgr) const {
 
-    CUIDTXprocessorType st = src.handle_.type;
-    CUIDTXprocessorType dt = dst.handle_.type;
+    CUIDTXprocessorType st = src.publicHandle().type;
+    CUIDTXprocessorType dt = dst.publicHandle().type;
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuGpu(src.info_.gpu, dst.info_.gpu, sameNode);
+        return resolveGpuGpu(src.info().gpu, dst.info().gpu, sameNode);
 
     if (st == CUIDTX_PROCESSOR_TYPE_GPU && dt == CUIDTX_PROCESSOR_TYPE_CPU)
-        return resolveGpuCpu(src.info_, dst.info_, sameNode);
+        return resolveGpuCpu(src.info(), dst.info(), sameNode);
 
     if (st == CUIDTX_PROCESSOR_TYPE_CPU && dt == CUIDTX_PROCESSOR_TYPE_GPU)
-        return resolveGpuCpu(dst.info_, src.info_, sameNode);
+        return resolveGpuCpu(dst.info(), src.info(), sameNode);
 
-    return resolveCpuCpu(src.info_, dst.info_, sameNode);
+    return resolveCpuCpu(src.info(), dst.info(), sameNode);
 }
 
 /* ==================================================================
@@ -221,7 +221,7 @@ void MachineManager::buildTopology(const MachineManager& dst) {
         for (auto& srcProc : srcVec) {
             for (auto& [dstType, dstVec] : dst.processors_) {
                 for (auto& dstProc : dstVec) {
-                    TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode_, dstProc->topologyNode_);
+                    TopologyNode::Pair nodePair = canonicalPair(srcProc->topologyNode(), dstProc->topologyNode());
                     if (nodePair.first.memberId != memberId)
                         continue;
                     if (topologyMap_.count(nodePair))
@@ -291,18 +291,18 @@ void MachineManager::print() const {
            memberId, hostname_,
            (int)gpus().size(), (int)cpus().size());
     for (const std::unique_ptr<Processor>& p : gpus()) {
-        std::string hl = handleStr(p->handle_);
-        const GPUInfo& gi = p->info_.gpu;
+        std::string hl = handleStr(p->publicHandle());
+        const GPUInfo& gi = p->info().gpu;
         printf("    %-12s  %s [%s]",
                hl.c_str(), gi.busId, gi.name);
-        if (p->info_.numaId >= 0)
-            printf(" NUMA:%d", p->info_.numaId);
+        if (p->info().numaId >= 0)
+            printf(" NUMA:%d", p->info().numaId);
         printf("\n");
     }
     for (const std::unique_ptr<Processor>& p : cpus()) {
-        std::string hl = handleStr(p->handle_);
+        std::string hl = handleStr(p->publicHandle());
         printf("    %-12s  NUMA %d  os_index %u\n",
-               hl.c_str(), p->info_.numaId, p->info_.cpu.osIndex);
+               hl.c_str(), p->info().numaId, p->info().cpu.osIndex);
     }
     printf("\n  Topology (%zu entries):\n", topologyMap_.size());
     for (const auto& [pair, ci] : topologyMap_) {
@@ -326,16 +326,16 @@ void printTopology(const std::vector<MachineManager>& managers) {
         for (const auto& [type, pvec] : M.processors()) {
             for (auto& np : pvec) {
                 GNode gn;
-                gn.tnode  = np->topologyNode_;
+                gn.tnode  = np->topologyNode();
                 gn.host   = M.hostname_;
 
                 if (gn.isGpu()) {
-                    const GPUInfo& gi = np->info_.gpu;
+                    const GPUInfo& gi = np->info().gpu;
                     gn.uuid    = gi.uuid;
                     gn.busId   = gi.busId;
                     gn.name    = gi.name;
                 }
-                gn.numaId = np->info_.numaId;
+                gn.numaId = np->info().numaId;
 
                 std::string k = gn.nodeKey();
                 if (key2g.count(k) == 0) {

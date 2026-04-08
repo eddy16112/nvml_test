@@ -56,11 +56,11 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
     w.nNodes = 0;
     for (auto& p : M.gpus()) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
-        w.nodes[w.nNodes++] = p->info_;
+        w.nodes[w.nNodes++] = p->info();
     }
     for (auto& p : M.cpus()) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
-        w.nodes[w.nNodes++] = p->info_;
+        w.nodes[w.nNodes++] = p->info();
     }
     w.nTopoEntries = 0;
     for (const auto& [pair, ci] : M.topologyMap()) {
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
         }
 
         if (!managers[0].cpus().empty()) {
-            int firstOrdinal = managers[0].cpus()[0]->handle_.cpu.cpuOrdinal;
+            int firstOrdinal = managers[0].cpus()[0]->publicHandle().cpu.cpuOrdinal;
             printTest("GPU->CPU",
                       mkGpu(0, 0), mkCpu(0, firstOrdinal));
         }
