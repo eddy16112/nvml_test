@@ -45,19 +45,22 @@ CudaPAL::~CudaPAL() {
     PAL_CHK_NVML(nvmlShutdown());
 }
 
-static std::string cuUuidToStr(const CUuuid& u) {
-    char buf[80];
-    const unsigned char* b = reinterpret_cast<const unsigned char*>(u.bytes);
-    snprintf(buf, sizeof(buf),
-        "GPU-%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-        b[0],b[1],b[2],b[3], b[4],b[5], b[6],b[7],
-        b[8],b[9], b[10],b[11],b[12],b[13],b[14],b[15]);
-    return buf;
-}
-
+// Enumerate all GPUs visible to the current process.
+//
+// Two device APIs are involved:
+//   - NVML: sees *all* GPUs on the node (including those not assigned to this
+//     process). Used for topology, bandwidth, and NVLink queries.
+//   - CUDA driver: sees only GPUs in CUDA_VISIBLE_DEVICES. Provides the
+//     device ordinal that the rest of the runtime uses.
+//
+// Strategy:
+//   1. Collect handle/busId/uuid for every NVML device.
+//   2. For each CUDA device, match its UUID against the NVML list to
+//      correlate the two handles, then query detailed info via NVML.
 std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     std::vector<ProcessorInfo> infos;
 
+    // Step 1: snapshot all NVML-visible devices
     unsigned int nAll = 0;
     PAL_CHK_NVML(nvmlDeviceGetCount_v2(&nAll));
 
@@ -75,6 +78,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         PAL_CHK_NVML(nvmlDeviceGetUUID(allDevs[i].handle, allDevs[i].uuid, UUID_SZ));
     }
 
+    // Step 2: iterate CUDA devices and correlate with NVML by UUID
     int nGpus = 0;
     PAL_CHK_CU(cuDeviceGetCount(&nGpus));
 
@@ -93,13 +97,16 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
         CUuuid cuUuid{};
         PAL_CHK_CU(cuDeviceGetUuid_v2(&cuUuid, cuDevice));
-        std::string cudaUuid = cuUuidToStr(cuUuid);
+        std::string cudaUuidStr = cuUuidToStr(cuUuid);
 
+        // Find the matching NVML device and query detailed topology info
         for (unsigned int k = 0; k < nAll; k++) {
-            if (cudaUuid != allDevs[k].uuid) continue;
+            if (cudaUuidStr != allDevs[k].uuid) {
+                continue;
+            }
             nvmlDevice_t hDev = allDevs[k].handle;
 
-            strncpy(gpuInfo.uuid, allDevs[k].uuid, UUID_SZ - 1);
+            gpuInfo.uuid = cuUuid;
             strncpy(gpuInfo.busId, allDevs[k].busId, BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
@@ -154,8 +161,9 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                     gpuInfo.c2cBwGBps = nLinks * fvs[1].value.uiVal / 1000.0f;
             }
 
+            // Enumerate active NVLink peers (remote bus-id + device type)
             int lcnt = 0;
-            for (unsigned l = 0; l < (unsigned)MAX_LINKS; l++) {
+            for (unsigned l = 0; l < static_cast<unsigned>(MAX_LINKS); l++) {
                 nvmlEnableState_t st;
                 nvmlReturn_t r = nvmlDeviceGetNvLinkState(hDev, l, &st);
                 if (r != NVML_SUCCESS) break;
@@ -175,6 +183,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             }
             gpuInfo.nNvLinks = lcnt;
 
+            // Record PCIe topology level and atomics support for every other GPU
             gpuInfo.nPcies = 0;
             for (unsigned int p = 0; p < nAll; p++) {
                 if (p == k) continue;

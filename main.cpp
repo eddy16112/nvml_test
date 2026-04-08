@@ -18,6 +18,9 @@
 #include "machine_manager.hpp"
 
 #include <cstdio>
+
+static constexpr int MAX_TOPO_NODES = 32;
+static constexpr int MAX_TOPO_PAIRS = 512;
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
@@ -55,11 +58,11 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
     strncpy(w.hostname, M.hostname_, HOST_SZ - 1);
     w.rank = M.memberId_;
     w.nNodes = 0;
-    for (auto& p : M.gpus()) {
+    for (auto& p : M.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU)) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
         w.nodes[w.nNodes++] = p->info();
     }
-    for (auto& p : M.cpus()) {
+    for (auto& p : M.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU)) {
         if (w.nNodes >= MAX_TOPO_NODES) break;
         w.nodes[w.nNodes++] = p->info();
     }
@@ -139,7 +142,7 @@ int main(int argc, char** argv) {
         local.loadPAL(gpuPal);
     }
     fprintf(stderr, "[R%d@%s] Phase 1A done, %d GPUs\n",
-            gRank, local.hostname_, (int)local.gpus().size());
+            gRank, local.hostname_, (int)local.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size());
     fflush(stderr);
 
     /* Phase 1B – CPU */
@@ -150,7 +153,7 @@ int main(int argc, char** argv) {
         local.loadPAL(cpuPal);
     }
     fprintf(stderr, "[R%d@%s] Phase 1B done, %d CPUs\n",
-            gRank, local.hostname_, (int)local.cpus().size());
+            gRank, local.hostname_, (int)local.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size());
     fflush(stderr);
 
     /* Phase 1C – local topology (intra-rank, parallel across all ranks) */
@@ -221,7 +224,7 @@ int main(int argc, char** argv) {
                    tag.c_str());
         };
 
-        if (managers[0].gpus().size() >= 2) {
+        if (managers[0].getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size() >= 2) {
             printTest("GPU local->local",
                       mkGpu(0, 0), mkGpu(0, 1));
         }
@@ -231,13 +234,13 @@ int main(int argc, char** argv) {
                       mkGpu(0, 0), mkGpu(1, 0));
         }
 
-        if (ws >= 2 && managers[1].gpus().size() >= 2) {
+        if (ws >= 2 && managers[1].getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size() >= 2) {
             printTest("GPU remote->remote",
                       mkGpu(1, 0), mkGpu(1, 1));
         }
 
-        if (!managers[0].cpus().empty()) {
-            int firstOrdinal = managers[0].cpus()[0]->publicHandle().cpu.cpuOrdinal;
+        if (!managers[0].getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).empty()) {
+            int firstOrdinal = managers[0].getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU)[0]->publicHandle().cpu.cpuOrdinal;
             printTest("GPU->CPU",
                       mkGpu(0, 0), mkCpu(0, firstOrdinal));
         }

@@ -8,6 +8,8 @@
 #include <set>
 #include <algorithm>
 #include <cassert>
+#include <iostream>
+#include <iomanip>
 
 
 void MachineManager::loadPAL(IProcessorAbstractionLayer &pal) 
@@ -20,6 +22,17 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
     for (const ProcessorInfo &info : processorInfos) {
         processors.emplace_back(std::make_unique<Processor>(info, memberId_));
     }
+}
+
+const std::vector<std::unique_ptr<Processor>> &MachineManager::getProcessorsByType(CUIDTXprocessorType type) const
+{
+    auto it = processors_.find(type);
+    if (it != processors_.end()) {
+        return it->second;
+    }
+
+    static const std::vector<std::unique_ptr<Processor>> empty;
+    return empty;
 }
 
 void MachineManager::addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p) {
@@ -138,10 +151,11 @@ static CUDTXprocessorConnectionInfo resolveGpuGpu(
         const GPUInfo& src, const GPUInfo& dst,
         bool sameNode) {
 
-    printf("  [resolveGpuGpu] src=%s (uuid=%.40s) ↔ dst=%s (uuid=%.40s) sameNode=%d\n",
-           src.busId, src.uuid, dst.busId, dst.uuid, sameNode);
+    printf("  [resolveGpuGpu] src=%s (uuid=%s) ↔ dst=%s (uuid=%s) sameNode=%d\n",
+           src.busId, cuUuidToStr(src.uuid).c_str(),
+           dst.busId, cuUuidToStr(dst.uuid).c_str(), sameNode);
 
-    if (strcmp(src.uuid, dst.uuid) == 0)
+    if (memcmp(&src.uuid, &dst.uuid, sizeof(CUuuid)) == 0)
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f, false};
 
     const float perLinkBw = src.nvlinkBwPerLinkGBps;
@@ -294,32 +308,33 @@ struct GNode {
     }
 };
 
-void MachineManager::print() const {
-    printf("  Member %-3u @ %-20s  %d GPU, %d CPU core\n",
-           memberId_, hostname_,
-           (int)gpus().size(), (int)cpus().size());
-    for (const std::unique_ptr<Processor>& p : gpus()) {
+std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
+    os << "  Member " << std::left << std::setw(3) << m.memberId_
+       << " @ " << std::setw(20) << m.hostname_
+       << "  " << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size() << " GPU, "
+       << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size() << " CPU core\n";
+    for (const auto& p : m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU)) {
         std::string hl = handleStr(p->publicHandle());
         const GPUInfo& gi = p->info().gpu;
-        printf("    %-12s  %s [%s]",
-               hl.c_str(), gi.busId, gi.name);
+        os << "    " << std::setw(12) << hl
+           << "  " << gi.busId << " [" << gi.name << "]";
         if (p->info().numaId >= 0)
-            printf(" NUMA:%d", p->info().numaId);
-        printf("\n");
+            os << " NUMA:" << p->info().numaId;
+        os << '\n';
     }
-    for (const std::unique_ptr<Processor>& p : cpus()) {
+    for (const auto& p : m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU)) {
         std::string hl = handleStr(p->publicHandle());
-        printf("    %-12s  NUMA %d  os_index %u\n",
-               hl.c_str(), p->info().numaId, p->info().cpu.osIndex);
+        os << "    " << std::setw(12) << hl
+           << "  NUMA " << p->info().numaId
+           << "  os_index " << p->info().cpu.osIndex << '\n';
     }
-    printf("\n  Topology (%zu entries):\n", topologyMap_.size());
-    for (const auto& [pair, ci] : topologyMap_) {
-        std::string tag = connInfoStr(ci);
-        printf("    %s <-> %s : %s\n",
-               topoNodeStr(pair.first).c_str(),
-               topoNodeStr(pair.second).c_str(),
-               tag.c_str());
+    os << "\n  Topology (" << m.topologyMap_.size() << " entries):\n";
+    for (const auto& [pair, ci] : m.topologyMap_) {
+        os << "    " << topoNodeStr(pair.first)
+           << " <-> " << topoNodeStr(pair.second)
+           << " : " << connInfoStr(ci) << '\n';
     }
+    return os;
 }
 
 void printTopology(const std::vector<MachineManager>& managers) {
@@ -339,7 +354,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
 
                 if (gn.isGpu()) {
                     const GPUInfo& gi = np->info().gpu;
-                    gn.uuid    = gi.uuid;
+                    gn.uuid    = cuUuidToStr(gi.uuid);
                     gn.busId   = gi.busId;
                     gn.name    = gi.name;
                 }
@@ -424,7 +439,7 @@ void printTopology(const std::vector<MachineManager>& managers) {
     /* ---- Per-Manager Details ---- */
     printf("\n--- Per-Manager Details ---\n");
     for (int r = 0; r < ws; r++) {
-        managers[r].print();
+        std::cout << managers[r];
     }
 
     /* ---- Topology Matrix ---- */

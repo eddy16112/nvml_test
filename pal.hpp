@@ -4,6 +4,7 @@
 #include <nvml.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cctype>
 #include <string>
@@ -11,12 +12,9 @@
 #include <hwloc.h>
 
 static constexpr int MAX_GPUS       = 16;
-static constexpr int MAX_NUMAS      = 16;
-static constexpr int MAX_TOPO_NODES = 32;
-static constexpr int MAX_TOPO_PAIRS = 512;
-static constexpr int MAX_LINKS      = 18;
-static constexpr int BUSID_SZ       = 32;
-static constexpr int UUID_SZ        = 96;
+static constexpr int MAX_LINKS      = NVML_NVLINK_MAX_LINKS;
+static constexpr int BUSID_SZ       = NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE;
+static constexpr int UUID_SZ        = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
 static constexpr int NAME_SZ        = 256;
 static constexpr int HOST_SZ        = 256;
 
@@ -96,6 +94,16 @@ inline std::string connInfoStr(const CUDTXprocessorConnectionInfo& c) {
     return s;
 }
 
+inline std::string cuUuidToStr(const CUuuid& u) {
+    char buf[80];
+    const unsigned char* b = reinterpret_cast<const unsigned char*>(u.bytes);
+    snprintf(buf, sizeof(buf),
+        "GPU-%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        b[0],b[1],b[2],b[3], b[4],b[5], b[6],b[7],
+        b[8],b[9], b[10],b[11],b[12],b[13],b[14],b[15]);
+    return buf;
+}
+
 /* ==================================================================
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
@@ -113,7 +121,7 @@ struct PCIEPeer {
 
 struct GPUInfo {
     CUdevice   deviceOrdinal;
-    char       uuid[UUID_SZ];
+    CUuuid     uuid;
     char       busId[BUSID_SZ];
     char       name[NAME_SZ];
     bool       hasC2C;

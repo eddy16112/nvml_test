@@ -7,6 +7,7 @@
 #include <map>
 #include <utility>
 #include <memory>
+#include <ostream>
 
 inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
                                         const TopologyNode& b) {
@@ -20,22 +21,13 @@ struct MachineManager {
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
 
     void loadPAL(IProcessorAbstractionLayer &pal);
+
+    [[nodiscard]] const std::vector<std::unique_ptr<Processor>> &getProcessorsByType(CUIDTXprocessorType type) const;
+    
     void buildTopology(const MachineManager& dst);
 
     CUDTXprocessorConnectionInfo query(const CUIDTXprocessor& a,
                                        const CUIDTXprocessor& b) const;
-
-    const std::vector<std::unique_ptr<Processor>>& gpus() const {
-        static const std::vector<std::unique_ptr<Processor>> empty;
-        ProcessorMap::const_iterator it = processors_.find(CUIDTX_PROCESSOR_TYPE_GPU);
-        return (it != processors_.end()) ? it->second : empty;
-    }
-
-    const std::vector<std::unique_ptr<Processor>>& cpus() const {
-        static const std::vector<std::unique_ptr<Processor>> empty;
-        ProcessorMap::const_iterator it = processors_.find(CUIDTX_PROCESSOR_TYPE_CPU);
-        return (it != processors_.end()) ? it->second : empty;
-    }
 
     const ProcessorMap& processors() const { return processors_; }
     const std::map<TopologyNode::Pair, CUDTXprocessorConnectionInfo>& topologyMap() const { return topologyMap_; }
@@ -44,7 +36,7 @@ struct MachineManager {
     void addTopologyEntry(const TopologyNode::Pair& pair, const CUDTXprocessorConnectionInfo& ci);
     void clearAll();
 
-    void print() const;
+    friend std::ostream& operator<<(std::ostream& os, const MachineManager& m);
 
 private:
     ProcessorMap processors_;
