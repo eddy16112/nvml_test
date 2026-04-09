@@ -180,12 +180,12 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             int lcnt = 0;
             for (unsigned l = 0; l < static_cast<unsigned>(MAX_LINKS); l++) {
                 nvmlEnableState_t st;
-                nvmlReturn_t r = nvmlDeviceGetNvLinkState(hDev, l, &st);
-                if (r != NVML_SUCCESS) break;
+                nvmlReturn_t ret = nvmlDeviceGetNvLinkState(hDev, l, &st);
+                if (ret != NVML_SUCCESS) break;
                 if (st != NVML_FEATURE_ENABLED) continue;
                 nvmlPciInfo_t rp;
-                r = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
-                if (r != NVML_SUCCESS) continue;
+                ret = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
+                if (ret != NVML_SUCCESS) continue;
                 if (lcnt >= MAX_LINKS)
                     break;
                 strncpy(gpuInfo.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
@@ -198,22 +198,24 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             }
             gpuInfo.nNvLinks = lcnt;
 
-            // Record PCIe topology level and atomics support for every other GPU
+            // Record PCIe topology level and atomics support for peers
+            // that share a PCIe hierarchy (same physical node).
             gpuInfo.nPcies = 0;
             for (unsigned int p = 0; p < nAll; p++) {
                 if (p == k) continue;
+                nvmlGpuTopologyLevel_t lvl;
+                nvmlReturn_t ret = nvmlDeviceGetTopologyCommonAncestor(hDev, allDevs[p].handle, &lvl);
+                if (ret != NVML_SUCCESS) continue;
                 if (gpuInfo.nPcies >= MAX_GPUS)
                     break;
                 PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
                 strncpy(peer.busId, allDevs[p].busId, BUSID_SZ - 1);
-                nvmlGpuTopologyLevel_t lvl;
-                nvmlReturn_t r2 = nvmlDeviceGetTopologyCommonAncestor(hDev, allDevs[p].handle, &lvl);
-                peer.nvmlTopoLevel = (r2 == NVML_SUCCESS) ? (int)lvl : -1;
+                peer.nvmlTopoLevel = (int)lvl;
 
                 nvmlGpuP2PStatus_t p2pStatus = NVML_P2P_STATUS_NOT_SUPPORTED;
-                nvmlReturn_t r3 = nvmlDeviceGetP2PStatus(hDev, allDevs[p].handle,
+                ret = nvmlDeviceGetP2PStatus(hDev, allDevs[p].handle,
                     NVML_P2P_CAPS_INDEX_ATOMICS, &p2pStatus);
-                peer.atomicsSupported = (r3 == NVML_SUCCESS &&
+                peer.atomicsSupported = (ret == NVML_SUCCESS &&
                                          p2pStatus == NVML_P2P_STATUS_OK);
                 gpuInfo.nPcies++;
             }

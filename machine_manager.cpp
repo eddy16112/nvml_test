@@ -127,7 +127,7 @@ static CUDTXprocessorConnectionInfo resolvePcie(const GPUInfo& gi,
             pt = gj.pcies[k].nvmlTopoLevel;
     CUDTXprocessorConnectionType ct = pcieTopoToConnType(pt);
     float bw = -1.0f;
-    if (ct == CUDTX_PROCESSOR_CONNECTION_TYPE_PIX || ct == CUDTX_PROCESSOR_CONNECTION_TYPE_PXB || ct == CUDTX_PROCESSOR_CONNECTION_TYPE_PHB) {
+    {
         float a = gi.pcieBwGBps, b = gj.pcieBwGBps;
         if (a >= 0 && b >= 0)      bw = std::min(a, b);
         else if (a >= 0)            bw = a;
@@ -158,20 +158,19 @@ static CUDTXprocessorConnectionInfo resolveGpuGpu(
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f, false};
 
     const float perLinkBw = src.nvlinkBwPerLinkGBps;
-    bool atomics = lookupAtomics(src, dst.busId);
 
     int nvl = countDirectNvLinks(src, dst.busId, sameNode);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
         float bw = (perLinkBw >= 0) ? nvl * perLinkBw : -1.0f;
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, bw, atomics};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, bw, true};
     }
 
     int nvs = countNvSwitchLinks(src, dst);
     if (nvs > 0) {
         printf("    → NVSwitch = %d\n", nvs);
         float bw = (perLinkBw >= 0) ? nvs * perLinkBw : -1.0f;
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, bw, atomics};
+        return {CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK, bw, true};
     }
 
     if (!sameNode) {
