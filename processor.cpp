@@ -15,16 +15,13 @@ std::ostream& operator<<(std::ostream& os, const Processor& p) {
             os << " NUMA:" << p.info().numaId;
         os << "  UUID:" << cuUuidToStr(gi.uuid);
         os << "  NVSwLinks:" << gi.nNvSwitchLinks
-           << " NVLGpuPeers:" << gi.nNvLinkGpuPeers;
+           << " GPUPeers:" << gi.nGPUPeers;
         if (gi.nvlinkBwPerLinkGBps >= 0)
-            os << " (" << gi.nvlinkBwPerLinkGBps << " GB/s/link)";
+            os << " NVLink BW:" << gi.nvlinkBwPerLinkGBps << " GB/s/link";
         if (gi.pcieBwGBps >= 0)
-            os << "  PCIe:" << gi.pcieBwGBps << " GB/s";
-        if (gi.hasC2C) {
-            os << "  C2C";
-            if (gi.c2cBwGBps >= 0)
-                os << ":" << gi.c2cBwGBps << " GB/s";
-        }
+            os << "  PCIe BW:" << gi.pcieBwGBps << " GB/s";
+        if (gi.c2cBwGBps >= 0)
+            os << "  C2C BW:" << gi.c2cBwGBps << " GB/s";
         if (gi.hasFabricInfo) {
             os << "  Cluster:";
             const unsigned char* u = gi.clusterUuid;
@@ -32,6 +29,13 @@ std::ostream& operator<<(std::ostream& os, const Processor& p) {
                 os << std::hex << std::setfill('0') << std::setw(2) << (int)u[b];
             os << std::dec << std::setfill(' ');
             os << "  Clique:" << gi.cliqueId;
+        }
+        for (int pi = 0; pi < gi.nGPUPeers; pi++) {
+            const GPUPeer& peer = gi.gpuPeers[pi];
+            os << "\n      Peer[" << pi << "] " << peer.busId
+               << "  NVL:" << peer.nvLinkCount
+               << "  TopoLvl:" << peer.nvmlTopoLevel
+               << "  Atomics:" << (peer.atomicsSupported ? "yes" : "no");
         }
         break;
     }

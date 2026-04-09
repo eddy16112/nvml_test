@@ -92,8 +92,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         PAL_CHK_CU(cuDeviceGet(&cuDevice, ci));
         gpuInfo.deviceOrdinal = cuDevice;
         gpuInfo.nNvSwitchLinks = 0;
-        gpuInfo.nNvLinkGpuPeers = 0;
-        gpuInfo.nPcies = 0;
+        gpuInfo.nGPUPeers = 0;
         PAL_CHK_CU(cuDeviceGetAttribute(
             &(info.numaId), CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cuDevice));
 
@@ -112,9 +111,12 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             strncpy(gpuInfo.busId, allDevs[k].busId, BUSID_SZ - 1);
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
-            nvmlC2cModeInfo_v1_t c2cInfo{};
-            gpuInfo.hasC2C = (nvmlDeviceGetC2cModeInfoV(hDev, &c2cInfo) == NVML_SUCCESS
-                              && c2cInfo.isC2cEnabled);
+            bool hasC2C = false;
+            {
+                nvmlC2cModeInfo_v1_t c2cInfo{};
+                hasC2C = (nvmlDeviceGetC2cModeInfoV(hDev, &c2cInfo) == NVML_SUCCESS
+                          && c2cInfo.isC2cEnabled);
+            }
 
             // NVLink per-link unidirectional speed
             gpuInfo.nvlinkBwPerLinkGBps = -1.0f;
@@ -151,7 +153,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
             // C2C total bandwidth = link_count × per_link_speed
             gpuInfo.c2cBwGBps = -1.0f;
-            if (gpuInfo.hasC2C) {
+            if (hasC2C) {
                 nvmlFieldValue_t fvs[2]{};
                 fvs[0].fieldId = NVML_FI_DEV_C2C_LINK_COUNT;
                 fvs[1].fieldId = NVML_FI_DEV_C2C_LINK_GET_MAX_BW;
@@ -178,17 +180,37 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 }
             }
 
-            // Enumerate active NVLink peers, aggregated by remote device.
-            // NVSwitch links: only count total lanes (no bus ID stored).
-            // GPU direct links: grouped by remote GPU bus ID with a lane count.
+            // Build unified GpuPeer array: start with PCIe peers (same node),
+            // then overlay NVLink direct-GPU link counts.
+            gpuInfo.nGPUPeers = 0;
+            for (unsigned int p = 0; p < nAll; p++) {
+                if (p == k) continue;
+                nvmlGpuTopologyLevel_t lvl;
+                nvmlReturn_t ret = nvmlDeviceGetTopologyCommonAncestor(hDev, allDevs[p].handle, &lvl);
+                if (ret != NVML_SUCCESS) continue;
+                GPUPeer& peer = gpuInfo.gpuPeers[gpuInfo.nGPUPeers];
+                strncpy(peer.busId, allDevs[p].busId, BUSID_SZ - 1);
+                peer.busId[BUSID_SZ - 1] = '\0';
+                peer.nvmlTopoLevel = lvl;
+                peer.nvLinkCount = 0;
+
+                nvmlGpuP2PStatus_t p2pStatus = NVML_P2P_STATUS_NOT_SUPPORTED;
+                ret = nvmlDeviceGetP2PStatus(hDev, allDevs[p].handle,
+                    NVML_P2P_CAPS_INDEX_ATOMICS, &p2pStatus);
+                peer.atomicsSupported = (ret == NVML_SUCCESS &&
+                                         p2pStatus == NVML_P2P_STATUS_OK);
+                gpuInfo.nGPUPeers++;
+            }
+
+            // NVLink enumeration: count NVSwitch lanes and overlay
+            // direct-GPU link counts onto the existing GpuPeer entries.
             unsigned int nLinks = static_cast<unsigned>(MAX_NVLINKS);
             {
                 nvmlFieldValue_t fv{};
                 fv.fieldId = NVML_FI_DEV_NVLINK_LINK_COUNT;
                 nvmlDeviceGetFieldValues(hDev, 1, &fv);
-                if (fv.nvmlReturn == NVML_SUCCESS && fv.value.uiVal > 0) {
+                if (fv.nvmlReturn == NVML_SUCCESS && fv.value.uiVal > 0)
                     nLinks = fv.value.uiVal;
-                }
             }
             for (unsigned l = 0; l < nLinks; l++) {
                 nvmlEnableState_t st;
@@ -205,47 +227,13 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                     nvmlPciInfo_t rp;
                     ret = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
                     if (ret != NVML_SUCCESS) continue;
-
-                    // Find existing peer entry or create a new one
-                    int idx = -1;
-                    for (int p = 0; p < gpuInfo.nNvLinkGpuPeers; p++) {
-                        if (strncmp(gpuInfo.nvLinkGpuPeers[p].remoteBusId, rp.busId, BUSID_SZ) == 0) {
-                            idx = p;
+                    for (int p = 0; p < gpuInfo.nGPUPeers; p++) {
+                        if (strncmp(gpuInfo.gpuPeers[p].busId, rp.busId, BUSID_SZ) == 0) {
+                            gpuInfo.gpuPeers[p].nvLinkCount++;
                             break;
                         }
                     }
-                    if (idx >= 0) {
-                        gpuInfo.nvLinkGpuPeers[idx].count++;
-                    } else if (gpuInfo.nNvLinkGpuPeers < MAX_GPUS) {
-                        NvLinkGpuPeer& peer = gpuInfo.nvLinkGpuPeers[gpuInfo.nNvLinkGpuPeers];
-                        strncpy(peer.remoteBusId, rp.busId, BUSID_SZ - 1);
-                        peer.remoteBusId[BUSID_SZ - 1] = '\0';
-                        peer.count = 1;
-                        gpuInfo.nNvLinkGpuPeers++;
-                    }
                 }
-            }
-
-            // Record PCIe topology level and atomics support for peers
-            // that share a PCIe hierarchy (same physical node).
-            gpuInfo.nPcies = 0;
-            for (unsigned int p = 0; p < nAll; p++) {
-                if (p == k) {
-                    continue;
-                }
-                nvmlGpuTopologyLevel_t lvl;
-                nvmlReturn_t ret = nvmlDeviceGetTopologyCommonAncestor(hDev, allDevs[p].handle, &lvl);
-                if (ret != NVML_SUCCESS) continue;
-                PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
-                strncpy(peer.busId, allDevs[p].busId, BUSID_SZ - 1);
-                peer.nvmlTopoLevel = lvl;
-
-                nvmlGpuP2PStatus_t p2pStatus = NVML_P2P_STATUS_NOT_SUPPORTED;
-                ret = nvmlDeviceGetP2PStatus(hDev, allDevs[p].handle,
-                    NVML_P2P_CAPS_INDEX_ATOMICS, &p2pStatus);
-                peer.atomicsSupported = (ret == NVML_SUCCESS &&
-                                         p2pStatus == NVML_P2P_STATUS_OK);
-                gpuInfo.nPcies++;
             }
 
             break;

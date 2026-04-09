@@ -103,14 +103,10 @@ inline std::string cuUuidToStr(const CUuuid& u) {
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
 
-struct NvLinkGpuPeer {
-    char remoteBusId[BUSID_SZ];
-    int32_t count;
-};
-
-struct PCIEPeer {
+struct GPUPeer {
     char busId[BUSID_SZ];
-    int32_t  nvmlTopoLevel;
+    int32_t nvLinkCount;      // direct NVLink lanes to this peer, 0 if none
+    nvmlGpuTopologyLevel_t nvmlTopoLevel;    // PCIe topology level, -1 if not on same node
     bool atomicsSupported;
 };
 
@@ -119,7 +115,6 @@ struct GPUInfo {
     CUuuid     uuid;
     char       busId[BUSID_SZ];
     char       name[NAME_SZ];
-    bool       hasC2C;
     float      nvlinkBwPerLinkGBps; // per-link NVLink speed, -1 if no NVLink
     float      pcieBwGBps;          // theoretical max PCIe bandwidth, -1 if unknown
     float      c2cBwGBps;           // C2C bandwidth, -1 if no C2C
@@ -127,10 +122,8 @@ struct GPUInfo {
     uint32_t   cliqueId;            // fabric clique within the cluster
     bool       hasFabricInfo;       // true if fabric info was successfully queried
     int32_t    nNvSwitchLinks;     // total NVLink lanes connected to NVSwitches
-    int32_t    nNvLinkGpuPeers;
-    NvLinkGpuPeer nvLinkGpuPeers[MAX_GPUS];
-    int32_t    nPcies;
-    PCIEPeer   pcies[MAX_GPUS];
+    int32_t    nGPUPeers;
+    GPUPeer    gpuPeers[MAX_GPUS];
 };
 
 struct CPUInfo

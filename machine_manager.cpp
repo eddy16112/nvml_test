@@ -70,13 +70,16 @@ static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
     }
 }
 
-static int countDirectNvLinks(const GPUInfo& gi, const char* peerBusId,
-                              bool sameNode) {
-    if (!sameNode) return 0;
-    for (int k = 0; k < gi.nNvLinkGpuPeers; k++)
-        if (sameBus(gi.nvLinkGpuPeers[k].remoteBusId, peerBusId))
-            return gi.nvLinkGpuPeers[k].count;
-    return 0;
+static const GPUPeer* findGpuPeer(const GPUInfo& gi, const char* peerBusId) {
+    for (int k = 0; k < gi.nGPUPeers; k++)
+        if (sameBus(gi.gpuPeers[k].busId, peerBusId))
+            return &gi.gpuPeers[k];
+    return nullptr;
+}
+
+static int countDirectNvLinks(const GPUInfo& gi, const char* peerBusId) {
+    const GPUPeer* p = findGpuPeer(gi, peerBusId);
+    return p ? p->nvLinkCount : 0;
 }
 
 static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
@@ -88,22 +91,15 @@ static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
     return src.nNvSwitchLinks;
 }
 
-static bool lookupAtomics(const GPUInfo& src, const char* peerBusId) {
-    for (int k = 0; k < src.nPcies; k++)
-        if (sameBus(src.pcies[k].busId, peerBusId))
-            return src.pcies[k].atomicsSupported;
-    return false;
-}
-
 static CUDTXprocessorConnectionInfo resolvePcie(const GPUInfo& gi,
                                                  const GPUInfo& gj) {
     int pt = -1;
-    for (int k = 0; k < gi.nPcies && pt < 0; k++)
-        if (sameBus(gi.pcies[k].busId, gj.busId))
-            pt = gi.pcies[k].nvmlTopoLevel;
-    for (int k = 0; k < gj.nPcies && pt < 0; k++)
-        if (sameBus(gj.pcies[k].busId, gi.busId))
-            pt = gj.pcies[k].nvmlTopoLevel;
+    const GPUPeer* p = findGpuPeer(gi, gj.busId);
+    if (p) pt = p->nvmlTopoLevel;
+    if (pt < 0) {
+        p = findGpuPeer(gj, gi.busId);
+        if (p) pt = p->nvmlTopoLevel;
+    }
     CUDTXprocessorConnectionType ct = pcieTopoToConnType(pt);
     float bw = -1.0f;
     {
@@ -112,7 +108,7 @@ static CUDTXprocessorConnectionInfo resolvePcie(const GPUInfo& gi,
         else if (a >= 0)            bw = a;
         else if (b >= 0)            bw = b;
     }
-    bool atomics = lookupAtomics(gi, gj.busId);
+    bool atomics = p ? p->atomicsSupported : false;
     return {ct, bw, atomics};
 }
 
@@ -138,7 +134,7 @@ static CUDTXprocessorConnectionInfo resolveGpuGpu(
 
     const float perLinkBw = src.nvlinkBwPerLinkGBps;
 
-    int nvl = countDirectNvLinks(src, dst.busId, sameNode);
+    int nvl = countDirectNvLinks(src, dst.busId);
     if (nvl > 0) {
         printf("    → direct NVLink = %d\n", nvl);
         float bw = (perLinkBw >= 0) ? nvl * perLinkBw : -1.0f;
@@ -171,7 +167,7 @@ static CUDTXprocessorConnectionInfo resolveGpuCpu(
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
     }
     if (src.numaId >= 0 && src.numaId == dst.numaId) {
-        if (gpu.hasC2C) {
+        if (gpu.c2cBwGBps >= 0) {
             return {CUDTX_PROCESSOR_CONNECTION_TYPE_C2C, gpu.c2cBwGBps, false};
         }
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_NODE, gpu.pcieBwGBps, false};
@@ -267,6 +263,7 @@ std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
         for (const auto& proc : pvec)
             os << *proc << '\n';
     }
+
     os << "\n  Topology (" << m.topologyMap_.size() << " entries):\n";
     std::vector<TopologyNode::Pair> sortedKeys;
     sortedKeys.reserve(m.topologyMap_.size());
