@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <utility>
 #include <memory>
 #include <ostream>
@@ -24,6 +25,8 @@ inline std::string busKey(const char* id) {
 }
 
 struct MachineManager {
+    using TopologyMap = std::unordered_map<TopologyNode::Pair, CUDTXprocessorConnectionInfo>;
+
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
 
     const char* hostname() const { return hostname_; }
@@ -42,7 +45,7 @@ struct MachineManager {
                                        const CUIDTXprocessor& b) const;
 
     const ProcessorMap& processors() const { return processors_; }
-    const std::map<TopologyNode::Pair, CUDTXprocessorConnectionInfo>& topologyMap() const { return topologyMap_; }
+    const TopologyMap& topologyMap() const { return topologyMap_; }
 
     void addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p);
     void addTopologyEntry(const TopologyNode::Pair& pair, const CUDTXprocessorConnectionInfo& ci);
@@ -54,7 +57,7 @@ private:
     char hostname_[HOST_SZ] {};
     uint32_t memberId_ = 0;
     ProcessorMap processors_;
-    std::map<TopologyNode::Pair, CUDTXprocessorConnectionInfo> topologyMap_;
+    TopologyMap topologyMap_;
 
     CUDTXprocessorConnectionInfo resolveNodeConnection(
             const Processor& src, const Processor& dst,

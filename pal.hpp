@@ -87,14 +87,6 @@ inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
     }
 }
 
-inline std::string connInfoStr(const CUDTXprocessorConnectionInfo& c) {
-    std::string s = connTypeTag(c.type);
-    if (c.bandwidth >= 0)
-        s += "(" + std::to_string((int)c.bandwidth) + ")";
-    if (c.supportAtomics)
-        s += "[A]";
-    return s;
-}
 
 inline std::string cuUuidToStr(const CUuuid& u) {
     char buf[80];
@@ -117,7 +109,7 @@ struct NvLinkPeer {
 
 struct PCIEPeer {
     char busId[BUSID_SZ];
-    int  nvmlTopoLevel;
+    int32_t  nvmlTopoLevel;
     bool atomicsSupported;
 };
 

@@ -49,6 +49,15 @@ static std::string handleStr(const CUIDTXprocessor& h) {
     return "CPU(" + std::to_string(h.memberId) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
 }
 
+
+static inline std::string connInfoStr(const CUDTXprocessorConnectionInfo& c) {
+    std::string s = connTypeTag(c.type);
+    if (c.bandwidth >= 0)
+        s += "(" + std::to_string((int)c.bandwidth) + ")";
+    if (c.supportAtomics)
+        s += "[A]";
+    return s;
+}
 /* Fixed-size POD wire block: MPI_Allgather(MPI_BYTE, sizeof(RankDataWire)). */
 
 struct TopoEntryWire {

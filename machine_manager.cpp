@@ -270,7 +270,6 @@ CUDTXprocessorConnectionInfo MachineManager::query(
     return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
 }
 
-
 std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
     os << "  Member " << std::left << std::setw(3) << m.memberId_
        << " @ " << std::setw(20) << m.hostname_
@@ -282,11 +281,19 @@ std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
             os << *proc << '\n';
     }
     os << "\n  Topology (" << m.topologyMap_.size() << " entries):\n";
-    for (const auto& [pair, ci] : m.topologyMap_) {
+    std::vector<TopologyNode::Pair> sortedKeys;
+    sortedKeys.reserve(m.topologyMap_.size());
+    for (const auto& [pair, ci] : m.topologyMap_)
+        sortedKeys.push_back(pair);
+    std::sort(sortedKeys.begin(), sortedKeys.end());
+    for (const auto& pair : sortedKeys) {
+        const auto& ci = m.topologyMap_.at(pair);
         os << "    " << pair.first
            << " <-> " << pair.second
-           << " : " << connInfoStr(ci) << '\n';
+           << " : " << connTypeTag(ci.type)
+           << "(BW=" << (int)ci.bandwidth
+           << ", Atomics=" << (ci.supportAtomics ? "yes" : "no")
+           << ")\n";
     }
     return os;
 }
-
