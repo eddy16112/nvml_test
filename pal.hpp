@@ -12,7 +12,6 @@
 #include <hwloc.h>
 
 static constexpr int MAX_GPUS       = 8;
-static constexpr int MAX_NVLINKS    = NVML_NVLINK_MAX_LINKS;
 static constexpr int BUSID_SZ       = NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE;
 static constexpr int GPU_UUID_SZ    = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
 static constexpr int FABRIC_UUID_SZ = NVML_GPU_FABRIC_UUID_LEN;
