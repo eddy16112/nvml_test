@@ -224,7 +224,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 if (ret != NVML_SUCCESS) continue;
                 PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
                 strncpy(peer.busId, allDevs[p].busId, BUSID_SZ - 1);
-                peer.nvmlTopoLevel = (int)lvl;
+                peer.nvmlTopoLevel = lvl;
 
                 nvmlGpuP2PStatus_t p2pStatus = NVML_P2P_STATUS_NOT_SUPPORTED;
                 ret = nvmlDeviceGetP2PStatus(hDev, allDevs[p].handle,

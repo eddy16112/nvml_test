@@ -299,8 +299,15 @@ static void printTopology(const std::vector<MachineManager>& managers) {
         labels[i] = toStr(G[i].tnode);
         maxLabelLen = std::max(maxLabelLen, (int)labels[i].size());
     }
-    int cw = std::max(maxLabelLen + 2, 8);
-    int rw = maxLabelLen + 2;
+    int maxConnLen = 0;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            maxConnLen = std::max(maxConnLen, (int)conn[i][j].size());
+        }
+    }
+    // Keep a larger fixed padding so long values like NVL(900)[A] do not look crowded.
+    int cw = std::max(maxLabelLen, maxConnLen) + 4;
+    int rw = maxLabelLen + 4;
 
     printf("%-*s", rw, "");
     for (int j = 0; j < N; j++) printf("%-*s", cw, labels[j].c_str());

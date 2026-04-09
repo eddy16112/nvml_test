@@ -82,13 +82,29 @@ static int countDirectNvLinks(const GPUInfo& gi, const char* peerBusId,
     return n;
 }
 
-// Count NVLink connections routed through shared NVSwitches.
-// Two GPUs on different nodes can share the same physical NVSwitch
-// (e.g. NVL72), so cross-node NVSwitch matches are intentional.
-// However, NVSwitch bus IDs are node-local and can collide across
-// independent fabric domains, so we first verify that both GPUs
-// belong to the same fabric cluster and clique via their cluster UUID.
+// Count NVLink connections routed through NVSwitch.
+// NCCL-style: if both GPUs are in the same fabric cluster and clique,
+// they share the NVSwitch domain. All NVSwitch links from the source
+// GPU are usable — no per-switch bus ID matching needed.
 static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
+    if (!src.hasFabricInfo || !dst.hasFabricInfo)
+        return 0;
+    if (memcmp(src.clusterUuid, dst.clusterUuid, FABRIC_UUID_SZ) != 0 ||
+        src.cliqueId != dst.cliqueId)
+        return 0;
+
+    int n = 0;
+    for (int k = 0; k < src.nNvLinks; k++)
+        if (src.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)
+            n++;
+    return n;
+}
+
+#if 0
+// Original version: per-NVSwitch bus ID matching.
+// Counts only the links that go through NVSwitches shared by both GPUs,
+// identified by matching the remote NVSwitch bus ID.
+static int countNvSwitchLinks_busIdMatch(const GPUInfo& src, const GPUInfo& dst) {
     if (src.hasFabricInfo && dst.hasFabricInfo) {
         if (memcmp(src.clusterUuid, dst.clusterUuid, FABRIC_UUID_SZ) != 0 ||
             src.cliqueId != dst.cliqueId)
@@ -108,6 +124,7 @@ static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
         if (swDst.count(kv.first)) n += kv.second;
     return n;
 }
+#endif
 
 static bool lookupAtomics(const GPUInfo& src, const char* peerBusId) {
     for (int k = 0; k < src.nPcies; k++)
