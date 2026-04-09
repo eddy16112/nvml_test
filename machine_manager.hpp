@@ -24,10 +24,13 @@ inline std::string busKey(const char* id) {
 }
 
 struct MachineManager {
-    char hostname_[HOST_SZ];
-    uint32_t memberId_;
-
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
+
+    const char* hostname() const { return hostname_; }
+    uint32_t memberId() const { return memberId_; }
+
+    void setHostname(const char* name) { strncpy(hostname_, name, HOST_SZ - 1); hostname_[HOST_SZ - 1] = '\0'; }
+    void setMemberId(uint32_t id) { memberId_ = id; }
 
     void loadPAL(IProcessorAbstractionLayer &pal);
 
@@ -48,6 +51,8 @@ struct MachineManager {
     friend std::ostream& operator<<(std::ostream& os, const MachineManager& m);
 
 private:
+    char hostname_[HOST_SZ] {};
+    uint32_t memberId_ = 0;
     ProcessorMap processors_;
     std::map<TopologyNode::Pair, CUDTXprocessorConnectionInfo> topologyMap_;
 

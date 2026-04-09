@@ -227,7 +227,7 @@ CUDTXprocessorConnectionInfo MachineManager::resolveNodeConnection(
  * ================================================================== */
 
 void MachineManager::buildTopology(const MachineManager& dst) {
-    bool sameNode = (std::string(dst.hostname_) == std::string(hostname_));
+    bool sameNode = (std::string(dst.hostname()) == std::string(hostname()));
 
     for (auto& [srcType, srcVec] : processors_) {
         for (auto& srcProc : srcVec) {
