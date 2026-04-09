@@ -44,10 +44,6 @@ void MachineManager::addTopologyEntry(const TopologyNode::Pair& pair,
     topologyMap_[pair] = ci;
 }
 
-void MachineManager::clearAll() {
-    processors_.clear();
-    topologyMap_.clear();
-}
 
 /* ==================================================================
  *  Helpers
@@ -210,7 +206,7 @@ CUDTXprocessorConnectionInfo MachineManager::resolveNodeConnection(
  * ================================================================== */
 
 void MachineManager::buildTopology(const MachineManager& dst) {
-    bool sameNode = (std::string(dst.hostname()) == std::string(hostname()));
+    bool sameNode = (hostId_ == dst.hostId());
 
     for (auto& [srcType, srcVec] : processors_) {
         for (auto& srcProc : srcVec) {
@@ -255,7 +251,7 @@ CUDTXprocessorConnectionInfo MachineManager::query(
 
 std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
     os << "  Member " << std::left << std::setw(3) << m.memberId_
-       << " @ " << std::setw(20) << m.hostname_
+       << " @ 0x" << std::hex << m.hostId_ << std::dec
        << "  " << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size() << " GPU, "
        << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size() << " CPU core\n";
 

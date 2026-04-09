@@ -71,7 +71,7 @@ struct TopoEntryWire {
 };
 
 struct RankDataWire {
-    char          hostname[HOST_SZ];
+    uint64_t      hostId;
     int           rank;
     int           nNodes;
     ProcessorInfo nodes[MAX_TOPO_NODES];
@@ -81,7 +81,7 @@ struct RankDataWire {
 
 static void packToWire(const MachineManager& M, RankDataWire& w) {
     memset(&w, 0, sizeof(w));
-    strncpy(w.hostname, M.hostname().c_str(), HOST_SZ - 1);
+    w.hostId = M.hostId();
     w.rank = M.memberId();
     w.nNodes = 0;
     for (auto& p : M.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU)) {
@@ -107,10 +107,8 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
     }
 }
 
-static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
-    M.setHostname(w.hostname);
-    M.setMemberId(w.rank);
-    M.clearAll();
+static MachineManager unpackFromWire(const RankDataWire& w) {
+    MachineManager M(w.rank, w.hostId);
     for (int i = 0; i < w.nNodes; i++) {
         M.addProcessor(w.nodes[i].type,
                        std::make_unique<Processor>(w.nodes[i], w.rank));
@@ -125,6 +123,7 @@ static void unpackFromWire(const RankDataWire& w, MachineManager& M) {
         ci.supportAtomics = (e.connAtomics != 0);
         M.addTopologyEntry(canonicalPair(src, dst), ci);
     }
+    return M;
 }
 
 static void exchangeRankData(const MachineManager& local,
@@ -140,9 +139,10 @@ static void exchangeRankData(const MachineManager& local,
                   allWire.data(), sizeof(RankDataWire), MPI_BYTE,
                   MPI_COMM_WORLD);
 
-    all.resize(ws);
+    all.clear();
+    all.reserve(ws);
     for (int r = 0; r < ws; r++)
-        unpackFromWire(allWire[r], all[r]);
+        all.push_back(unpackFromWire(allWire[r]));
 }
 
 /* ==================================================================
@@ -189,7 +189,7 @@ static void printTopology(const std::vector<MachineManager>& managers) {
             for (auto& np : pvec) {
                 GNode gn;
                 gn.tnode  = np->topologyNode();
-                gn.host   = M.hostname();
+                { char buf[20]; snprintf(buf, sizeof(buf), "0x%016lx", (unsigned long)M.hostId()); gn.host = buf; }
 
                 if (gn.isGpu()) {
                     const GPUInfo& gi = np->info().gpu;
@@ -345,16 +345,11 @@ int main(int argc, char** argv) {
     int ws;
     MPI_Comm_size(MPI_COMM_WORLD, &ws);
 
-    MachineManager local;
-    {
-        char hostbuf[HOST_SZ] {};
-        gethostname(hostbuf, HOST_SZ);
-        local.setHostname(hostbuf);
-    }
-    local.setMemberId(gRank);
+    std::string hostIdStr = getHostId();
+    MachineManager local(gRank, hashHostId(hostIdStr));
 
     /* Phase 1A – GPU */
-    fprintf(stderr, "[R%d@%s] Phase 1A start\n", gRank, local.hostname().c_str());
+    fprintf(stderr, "[R%d@%s] Phase 1A start\n", gRank, hostIdStr.c_str());
     fflush(stderr);
     if (gRank == 0)
         printf("[Phase 1A] Collecting local GPU data (CudaPAL) ...\n");
@@ -363,7 +358,7 @@ int main(int argc, char** argv) {
         local.loadPAL(gpuPal);
     }
     fprintf(stderr, "[R%d@%s] Phase 1A done, %d GPUs\n",
-            gRank, local.hostname().c_str(), (int)local.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size());
+            gRank, hostIdStr.c_str(), (int)local.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size());
     fflush(stderr);
 
     /* Phase 1B – CPU */
@@ -374,7 +369,7 @@ int main(int argc, char** argv) {
         local.loadPAL(cpuPal);
     }
     fprintf(stderr, "[R%d@%s] Phase 1B done, %d CPUs\n",
-            gRank, local.hostname().c_str(), (int)local.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size());
+            gRank, hostIdStr.c_str(), (int)local.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size());
     fflush(stderr);
 
     /* Phase 1C – local topology (intra-rank, parallel across all ranks) */
@@ -382,10 +377,10 @@ int main(int argc, char** argv) {
         printf("[Phase 1C] Building local topology ...\n");
     local.buildTopology(local);
     fprintf(stderr, "[R%d@%s] Phase 1C done, %zu local topology entries. Entering barrier...\n",
-            gRank, local.hostname().c_str(), local.topologyMap().size());
+            gRank, hostIdStr.c_str(), local.topologyMap().size());
     fflush(stderr);
     MPI_Barrier(MPI_COMM_WORLD);
-    fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, local.hostname().c_str());
+    fprintf(stderr, "[R%d@%s] Barrier passed\n", gRank, hostIdStr.c_str());
     fflush(stderr);
 
     /* Phase 2 */

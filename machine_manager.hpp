@@ -2,10 +2,14 @@
 
 #include "processor.hpp"
 
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <unistd.h>
 #include <utility>
 #include <memory>
 #include <ostream>
@@ -13,6 +17,29 @@
 inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
                                         const TopologyNode& b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+}
+
+inline std::string getHostId() {
+    char hostbuf[HOST_SZ]{};
+    gethostname(hostbuf, HOST_SZ);
+    std::string id(hostbuf);
+    FILE* f = fopen("/proc/sys/kernel/random/boot_id", "r");
+    if (f) {
+        char bootId[64]{};
+        if (fscanf(f, "%63s", bootId) == 1)
+            id += bootId;
+        fclose(f);
+    }
+    return id;
+}
+
+inline uint64_t hashHostId(const std::string& id) {
+    uint64_t h = 14695981039346656037ULL;
+    for (char c : id) {
+        h ^= static_cast<uint8_t>(c);
+        h *= 1099511628211ULL;
+    }
+    return h;
 }
 
 inline std::string busKey(const char* id) {
@@ -29,11 +56,11 @@ struct MachineManager {
 
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
 
-    const std::string& hostname() const { return hostname_; }
-    uint32_t memberId() const { return memberId_; }
+    explicit MachineManager(uint32_t memberId, uint64_t hostId)
+        : hostId_(hostId), memberId_(memberId) {}
 
-    void setHostname(const char* name) { hostname_ = name; }
-    void setMemberId(uint32_t id) { memberId_ = id; }
+    uint64_t hostId() const { return hostId_; }
+    uint32_t memberId() const { return memberId_; }
 
     void loadPAL(IProcessorAbstractionLayer &pal);
 
@@ -49,12 +76,10 @@ struct MachineManager {
 
     void addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p);
     void addTopologyEntry(const TopologyNode::Pair& pair, const CUDTXprocessorConnectionInfo& ci);
-    void clearAll();
-
     friend std::ostream& operator<<(std::ostream& os, const MachineManager& m);
 
 private:
-    std::string hostname_;
+    uint64_t hostId_ = 0;
     uint32_t memberId_ = 0;
     ProcessorMap processors_;
     TopologyMap topologyMap_;
