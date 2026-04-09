@@ -67,7 +67,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     struct NvmlDeviceInfo {
         nvmlDevice_t handle;
         char busId[BUSID_SZ];
-        char uuid[UUID_SZ];
+        char uuid[GPU_UUID_SZ];
     };
     std::vector<NvmlDeviceInfo> allDevs(nAll);
     for (unsigned int i = 0; i < nAll; i++) {
@@ -75,7 +75,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         nvmlPciInfo_t pci;
         PAL_CHK_NVML(nvmlDeviceGetPciInfo_v3(allDevs[i].handle, &pci));
         strncpy(allDevs[i].busId, pci.busId, BUSID_SZ - 1);
-        PAL_CHK_NVML(nvmlDeviceGetUUID(allDevs[i].handle, allDevs[i].uuid, UUID_SZ));
+        PAL_CHK_NVML(nvmlDeviceGetUUID(allDevs[i].handle, allDevs[i].uuid, GPU_UUID_SZ));
     }
 
     // Step 2: iterate CUDA devices and correlate with NVML by UUID
@@ -159,6 +159,21 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                     nLinks = fvs[0].value.uiVal;
                 if (fvs[1].nvmlReturn == NVML_SUCCESS)
                     gpuInfo.c2cBwGBps = nLinks * fvs[1].value.uiVal / 1000.0f;
+            }
+
+            // NVSwitch fabric cluster UUID + clique ID
+            gpuInfo.hasFabricInfo = false;
+            memset(gpuInfo.clusterUuid, 0, FABRIC_UUID_SZ);
+            gpuInfo.cliqueId = 0;
+            {
+                nvmlGpuFabricInfo_t fabricInfo{};
+                if (nvmlDeviceGetGpuFabricInfo(hDev, &fabricInfo) == NVML_SUCCESS &&
+                    fabricInfo.state == NVML_GPU_FABRIC_STATE_COMPLETED &&
+                    fabricInfo.status == NVML_SUCCESS) {
+                    memcpy(gpuInfo.clusterUuid, fabricInfo.clusterUuid, FABRIC_UUID_SZ);
+                    gpuInfo.cliqueId = fabricInfo.cliqueId;
+                    gpuInfo.hasFabricInfo = true;
+                }
             }
 
             // Enumerate active NVLink peers (remote bus-id + device type)

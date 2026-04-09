@@ -24,6 +24,14 @@ std::ostream& operator<<(std::ostream& os, const Processor& p) {
             if (gi.c2cBwGBps >= 0)
                 os << ":" << gi.c2cBwGBps << " GB/s";
         }
+        if (gi.hasFabricInfo) {
+            os << "  Cluster:";
+            const unsigned char* u = gi.clusterUuid;
+            for (int b = 0; b < FABRIC_UUID_SZ; b++)
+                os << std::hex << std::setfill('0') << std::setw(2) << (int)u[b];
+            os << std::dec << std::setfill(' ');
+            os << "  Clique:" << gi.cliqueId;
+        }
         break;
     }
     case CUIDTX_PROCESSOR_TYPE_CPU: {

@@ -85,7 +85,16 @@ static int countDirectNvLinks(const GPUInfo& gi, const char* peerBusId,
 // Count NVLink connections routed through shared NVSwitches.
 // Two GPUs on different nodes can share the same physical NVSwitch
 // (e.g. NVL72), so cross-node NVSwitch matches are intentional.
+// However, NVSwitch bus IDs are node-local and can collide across
+// independent fabric domains, so we first verify that both GPUs
+// belong to the same fabric cluster and clique via their cluster UUID.
 static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
+    if (src.hasFabricInfo && dst.hasFabricInfo) {
+        if (memcmp(src.clusterUuid, dst.clusterUuid, FABRIC_UUID_SZ) != 0 ||
+            src.cliqueId != dst.cliqueId)
+            return 0;
+    }
+
     std::map<std::string, int> swSrc, swDst;
     for (int k = 0; k < src.nNvLinks; k++)
         if (src.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)

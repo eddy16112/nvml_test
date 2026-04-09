@@ -14,7 +14,8 @@
 static constexpr int MAX_GPUS       = 16;
 static constexpr int MAX_LINKS      = NVML_NVLINK_MAX_LINKS;
 static constexpr int BUSID_SZ       = NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE;
-static constexpr int UUID_SZ        = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
+static constexpr int GPU_UUID_SZ    = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
+static constexpr int FABRIC_UUID_SZ = NVML_GPU_FABRIC_UUID_LEN;
 static constexpr int NAME_SZ        = 256;
 static constexpr int HOST_SZ        = 256;
 
@@ -122,6 +123,9 @@ struct GPUInfo {
     float      nvlinkBwPerLinkGBps; // per-link NVLink speed, -1 if no NVLink
     float      pcieBwGBps;          // theoretical max PCIe bandwidth, -1 if unknown
     float      c2cBwGBps;           // C2C bandwidth, -1 if no C2C
+    unsigned char clusterUuid[FABRIC_UUID_SZ]; // NVSwitch fabric cluster UUID
+    uint32_t   cliqueId;            // fabric clique within the cluster
+    bool       hasFabricInfo;       // true if fabric info was successfully queried
     int32_t    nNvLinks;
     NvLinkPeer nvLinks[MAX_LINKS];
     int32_t    nPcies;

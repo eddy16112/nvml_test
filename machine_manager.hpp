@@ -29,10 +29,10 @@ struct MachineManager {
 
     using ProcessorMap = std::map<CUIDTXprocessorType, std::vector<std::unique_ptr<Processor>>>;
 
-    const char* hostname() const { return hostname_; }
+    const std::string& hostname() const { return hostname_; }
     uint32_t memberId() const { return memberId_; }
 
-    void setHostname(const char* name) { strncpy(hostname_, name, HOST_SZ - 1); hostname_[HOST_SZ - 1] = '\0'; }
+    void setHostname(const char* name) { hostname_ = name; }
     void setMemberId(uint32_t id) { memberId_ = id; }
 
     void loadPAL(IProcessorAbstractionLayer &pal);
@@ -54,7 +54,7 @@ struct MachineManager {
     friend std::ostream& operator<<(std::ostream& os, const MachineManager& m);
 
 private:
-    char hostname_[HOST_SZ] {};
+    std::string hostname_;
     uint32_t memberId_ = 0;
     ProcessorMap processors_;
     TopologyMap topologyMap_;
