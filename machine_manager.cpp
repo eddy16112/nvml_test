@@ -283,8 +283,8 @@ std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
     }
     os << "\n  Topology (" << m.topologyMap_.size() << " entries):\n";
     for (const auto& [pair, ci] : m.topologyMap_) {
-        os << "    " << topoNodeStr(pair.first)
-           << " <-> " << topoNodeStr(pair.second)
+        os << "    " << pair.first
+           << " <-> " << pair.second
            << " : " << connInfoStr(ci) << '\n';
     }
     return os;

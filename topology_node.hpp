@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <ostream>
 #include <utility>
 
 struct TopologyNode
@@ -38,10 +39,22 @@ struct TopologyNode
     bool operator!=(const TopologyNode& rhs) const noexcept {
         return !(*this == rhs);
     }
+
+    std::size_t hash() const noexcept
+    {
+        std::size_t h = std::hash<CUDTXmemberId> {}(memberId);
+        h ^= std::hash<uint64_t> {}(
+                 (static_cast<uint64_t>(type) << 32U) | static_cast<uint64_t>(static_cast<uint32_t>(localId))
+             )
+            + 0x9e3779b97f4a7c15ULL + (h << 6U) + (h >> 2U);
+        return h;
+    }
 };
 
-inline std::string topoNodeStr(const TopologyNode& n) {
+inline std::ostream& operator<<(std::ostream& os, const TopologyNode& n) {
     if (n.type == CUIDTX_PROCESSOR_TYPE_GPU)
-        return "GPU(" + std::to_string(n.memberId) + "," + std::to_string(n.localId) + ")";
-    return "CPU(" + std::to_string(n.memberId) + "," + std::to_string(n.localId) + ")";
+        os << "GPU(" << n.memberId << "," << n.localId << ")";
+    else
+        os << "CPU(" << n.memberId << "," << n.localId << ")";
+    return os;
 }

@@ -26,6 +26,7 @@
 #include <memory>
 #include <algorithm>
 #include <iostream>
+#include <sstream>
 #include <unistd.h>
 
 static constexpr int MAX_TOPO_NODES = 32;
@@ -34,6 +35,13 @@ static constexpr int MAX_TOPO_PAIRS = 512;
 #include <mpi.h>
 
 static int gRank = 0;
+
+template<typename T>
+static std::string toStr(const T& v) {
+    std::ostringstream oss;
+    oss << v;
+    return oss.str();
+}
 
 static std::string handleStr(const CUIDTXprocessor& h) {
     if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
@@ -239,7 +247,7 @@ static void printTopology(const std::vector<MachineManager>& managers) {
     printf("\n--- All Unique Nodes (%d GPU, %d CPU NUMA) ---\n\n", nGpus, nCpus);
     for (int i = 0; i < N; i++) {
         const GNode& g = G[i];
-        std::string label = topoNodeStr(g.tnode);
+        std::string label = toStr(g.tnode);
         if (g.isGpu()) {
             printf("  %-12s  %-16s  %-24s  %-16s",
                    label.c_str(), g.busId.c_str(), g.name.c_str(),
@@ -272,7 +280,7 @@ static void printTopology(const std::vector<MachineManager>& managers) {
     std::vector<std::string> labels(N);
     int maxLabelLen = 0;
     for (int i = 0; i < N; i++) {
-        labels[i] = topoNodeStr(G[i].tnode);
+        labels[i] = toStr(G[i].tnode);
         maxLabelLen = std::max(maxLabelLen, (int)labels[i].size());
     }
     int cw = std::max(maxLabelLen + 2, 8);
