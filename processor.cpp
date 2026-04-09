@@ -14,7 +14,8 @@ std::ostream& operator<<(std::ostream& os, const Processor& p) {
         if (p.info().numaId >= 0)
             os << " NUMA:" << p.info().numaId;
         os << "  UUID:" << cuUuidToStr(gi.uuid);
-        os << "  NVLinks:" << gi.nNvLinks;
+        os << "  NVSwLinks:" << gi.nNvSwitchLinks
+           << " NVLGpuPeers:" << gi.nNvLinkGpuPeers;
         if (gi.nvlinkBwPerLinkGBps >= 0)
             os << " (" << gi.nvlinkBwPerLinkGBps << " GB/s/link)";
         if (gi.pcieBwGBps >= 0)

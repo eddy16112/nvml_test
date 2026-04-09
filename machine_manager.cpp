@@ -70,61 +70,23 @@ static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
     }
 }
 
-// Direct GPU-to-GPU NVLink can only exist on the same node.
 static int countDirectNvLinks(const GPUInfo& gi, const char* peerBusId,
                               bool sameNode) {
     if (!sameNode) return 0;
-    int n = 0;
-    for (int k = 0; k < gi.nNvLinks; k++)
-        if (gi.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_GPU &&
-            sameBus(gi.nvLinks[k].remoteBusId, peerBusId))
-            n++;
-    return n;
+    for (int k = 0; k < gi.nNvLinkGpuPeers; k++)
+        if (sameBus(gi.nvLinkGpuPeers[k].remoteBusId, peerBusId))
+            return gi.nvLinkGpuPeers[k].count;
+    return 0;
 }
 
-// Count NVLink connections routed through NVSwitch.
-// NCCL-style: if both GPUs are in the same fabric cluster and clique,
-// they share the NVSwitch domain. All NVSwitch links from the source
-// GPU are usable — no per-switch bus ID matching needed.
 static int countNvSwitchLinks(const GPUInfo& src, const GPUInfo& dst) {
     if (!src.hasFabricInfo || !dst.hasFabricInfo)
         return 0;
     if (memcmp(src.clusterUuid, dst.clusterUuid, FABRIC_UUID_SZ) != 0 ||
         src.cliqueId != dst.cliqueId)
         return 0;
-
-    int n = 0;
-    for (int k = 0; k < src.nNvLinks; k++)
-        if (src.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)
-            n++;
-    return n;
+    return src.nNvSwitchLinks;
 }
-
-#if 0
-// Original version: per-NVSwitch bus ID matching.
-// Counts only the links that go through NVSwitches shared by both GPUs,
-// identified by matching the remote NVSwitch bus ID.
-static int countNvSwitchLinks_busIdMatch(const GPUInfo& src, const GPUInfo& dst) {
-    if (src.hasFabricInfo && dst.hasFabricInfo) {
-        if (memcmp(src.clusterUuid, dst.clusterUuid, FABRIC_UUID_SZ) != 0 ||
-            src.cliqueId != dst.cliqueId)
-            return 0;
-    }
-
-    std::map<std::string, int> swSrc, swDst;
-    for (int k = 0; k < src.nNvLinks; k++)
-        if (src.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)
-            swSrc[busKey(src.nvLinks[k].remoteBusId)]++;
-    for (int k = 0; k < dst.nNvLinks; k++)
-        if (dst.nvLinks[k].remoteDeviceType == NVML_NVLINK_DEVICE_TYPE_SWITCH)
-            swDst[busKey(dst.nvLinks[k].remoteBusId)]++;
-
-    int n = 0;
-    for (const std::pair<const std::string, int>& kv : swSrc)
-        if (swDst.count(kv.first)) n += kv.second;
-    return n;
-}
-#endif
 
 static bool lookupAtomics(const GPUInfo& src, const char* peerBusId) {
     for (int k = 0; k < src.nPcies; k++)

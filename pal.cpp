@@ -91,7 +91,8 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         CUdevice cuDevice{};
         PAL_CHK_CU(cuDeviceGet(&cuDevice, ci));
         gpuInfo.deviceOrdinal = cuDevice;
-        gpuInfo.nNvLinks = 0;
+        gpuInfo.nNvSwitchLinks = 0;
+        gpuInfo.nNvLinkGpuPeers = 0;
         gpuInfo.nPcies = 0;
         PAL_CHK_CU(cuDeviceGetAttribute(
             &(info.numaId), CU_DEVICE_ATTRIBUTE_HOST_NUMA_ID, cuDevice));
@@ -177,8 +178,10 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 }
             }
 
-            // Enumerate active NVLink peers (remote bus-id + device type)
-            unsigned int nLinks = static_cast<unsigned>(MAX_LINKS);
+            // Enumerate active NVLink peers, aggregated by remote device.
+            // NVSwitch links: only count total lanes (no bus ID stored).
+            // GPU direct links: grouped by remote GPU bus ID with a lane count.
+            unsigned int nLinks = static_cast<unsigned>(MAX_NVLINKS);
             {
                 nvmlFieldValue_t fv{};
                 fv.fieldId = NVML_FI_DEV_NVLINK_LINK_COUNT;
@@ -187,30 +190,41 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                     nLinks = fv.value.uiVal;
                 }
             }
-            int lcnt = 0;
             for (unsigned l = 0; l < nLinks; l++) {
                 nvmlEnableState_t st;
                 nvmlReturn_t ret = nvmlDeviceGetNvLinkState(hDev, l, &st);
-                if (ret != NVML_SUCCESS) {
+                if (ret != NVML_SUCCESS || st != NVML_FEATURE_ENABLED)
                     continue;
-                }
-                if (st != NVML_FEATURE_ENABLED) {
-                    continue;
-                }
-                nvmlPciInfo_t rp;
-                ret = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
-                if (ret != NVML_SUCCESS) {
-                    continue;
-                }
-                strncpy(gpuInfo.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
 
-                gpuInfo.nvLinks[lcnt].remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
-                nvmlDeviceGetNvLinkRemoteDeviceType(hDev, l,
-                    &gpuInfo.nvLinks[lcnt].remoteDeviceType);
-                assert(gpuInfo.nvLinks[lcnt].remoteDeviceType != NVML_NVLINK_DEVICE_TYPE_UNKNOWN);
-                lcnt++;
+                nvmlIntNvLinkDeviceType_t devType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
+                nvmlDeviceGetNvLinkRemoteDeviceType(hDev, l, &devType);
+
+                if (devType == NVML_NVLINK_DEVICE_TYPE_SWITCH) {
+                    gpuInfo.nNvSwitchLinks++;
+                } else if (devType == NVML_NVLINK_DEVICE_TYPE_GPU) {
+                    nvmlPciInfo_t rp;
+                    ret = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
+                    if (ret != NVML_SUCCESS) continue;
+
+                    // Find existing peer entry or create a new one
+                    int idx = -1;
+                    for (int p = 0; p < gpuInfo.nNvLinkGpuPeers; p++) {
+                        if (strncmp(gpuInfo.nvLinkGpuPeers[p].remoteBusId, rp.busId, BUSID_SZ) == 0) {
+                            idx = p;
+                            break;
+                        }
+                    }
+                    if (idx >= 0) {
+                        gpuInfo.nvLinkGpuPeers[idx].count++;
+                    } else if (gpuInfo.nNvLinkGpuPeers < MAX_GPUS) {
+                        NvLinkGpuPeer& peer = gpuInfo.nvLinkGpuPeers[gpuInfo.nNvLinkGpuPeers];
+                        strncpy(peer.remoteBusId, rp.busId, BUSID_SZ - 1);
+                        peer.remoteBusId[BUSID_SZ - 1] = '\0';
+                        peer.count = 1;
+                        gpuInfo.nNvLinkGpuPeers++;
+                    }
+                }
             }
-            gpuInfo.nNvLinks = lcnt;
 
             // Record PCIe topology level and atomics support for peers
             // that share a PCIe hierarchy (same physical node).

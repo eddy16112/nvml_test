@@ -11,8 +11,8 @@
 #include <vector>
 #include <hwloc.h>
 
-static constexpr int MAX_GPUS       = 16;
-static constexpr int MAX_LINKS      = NVML_NVLINK_MAX_LINKS;
+static constexpr int MAX_GPUS       = 8;
+static constexpr int MAX_NVLINKS    = NVML_NVLINK_MAX_LINKS;
 static constexpr int BUSID_SZ       = NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE;
 static constexpr int GPU_UUID_SZ    = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
 static constexpr int FABRIC_UUID_SZ = NVML_GPU_FABRIC_UUID_LEN;
@@ -103,9 +103,9 @@ inline std::string cuUuidToStr(const CUuuid& u) {
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
 
-struct NvLinkPeer {
+struct NvLinkGpuPeer {
     char remoteBusId[BUSID_SZ];
-    nvmlIntNvLinkDeviceType_t remoteDeviceType;
+    int32_t count;
 };
 
 struct PCIEPeer {
@@ -126,8 +126,9 @@ struct GPUInfo {
     unsigned char clusterUuid[FABRIC_UUID_SZ]; // NVSwitch fabric cluster UUID
     uint32_t   cliqueId;            // fabric clique within the cluster
     bool       hasFabricInfo;       // true if fabric info was successfully queried
-    int32_t    nNvLinks;
-    NvLinkPeer nvLinks[MAX_LINKS];
+    int32_t    nNvSwitchLinks;     // total NVLink lanes connected to NVSwitches
+    int32_t    nNvLinkGpuPeers;
+    NvLinkGpuPeer nvLinkGpuPeers[MAX_GPUS];
     int32_t    nPcies;
     PCIEPeer   pcies[MAX_GPUS];
 };
