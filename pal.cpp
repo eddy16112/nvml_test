@@ -63,6 +63,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     // Step 1: snapshot all NVML-visible devices
     unsigned int nAll = 0;
     PAL_CHK_NVML(nvmlDeviceGetCount_v2(&nAll));
+    assert(nAll <= MAX_GPUS);
 
     struct NvmlDeviceInfo {
         nvmlDevice_t handle;
@@ -177,17 +178,30 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             }
 
             // Enumerate active NVLink peers (remote bus-id + device type)
+            unsigned int nLinks = static_cast<unsigned>(MAX_LINKS);
+            {
+                nvmlFieldValue_t fv{};
+                fv.fieldId = NVML_FI_DEV_NVLINK_LINK_COUNT;
+                nvmlDeviceGetFieldValues(hDev, 1, &fv);
+                if (fv.nvmlReturn == NVML_SUCCESS && fv.value.uiVal > 0) {
+                    nLinks = fv.value.uiVal;
+                }
+            }
             int lcnt = 0;
-            for (unsigned l = 0; l < static_cast<unsigned>(MAX_LINKS); l++) {
+            for (unsigned l = 0; l < nLinks; l++) {
                 nvmlEnableState_t st;
                 nvmlReturn_t ret = nvmlDeviceGetNvLinkState(hDev, l, &st);
-                if (ret != NVML_SUCCESS) break;
-                if (st != NVML_FEATURE_ENABLED) continue;
+                if (ret != NVML_SUCCESS) {
+                    continue;
+                }
+                if (st != NVML_FEATURE_ENABLED) {
+                    continue;
+                }
                 nvmlPciInfo_t rp;
                 ret = nvmlDeviceGetNvLinkRemotePciInfo_v2(hDev, l, &rp);
-                if (ret != NVML_SUCCESS) continue;
-                if (lcnt >= MAX_LINKS)
-                    break;
+                if (ret != NVML_SUCCESS) {
+                    continue;
+                }
                 strncpy(gpuInfo.nvLinks[lcnt].remoteBusId, rp.busId, BUSID_SZ - 1);
 
                 gpuInfo.nvLinks[lcnt].remoteDeviceType = NVML_NVLINK_DEVICE_TYPE_UNKNOWN;
@@ -202,12 +216,12 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             // that share a PCIe hierarchy (same physical node).
             gpuInfo.nPcies = 0;
             for (unsigned int p = 0; p < nAll; p++) {
-                if (p == k) continue;
+                if (p == k) {
+                    continue;
+                }
                 nvmlGpuTopologyLevel_t lvl;
                 nvmlReturn_t ret = nvmlDeviceGetTopologyCommonAncestor(hDev, allDevs[p].handle, &lvl);
                 if (ret != NVML_SUCCESS) continue;
-                if (gpuInfo.nPcies >= MAX_GPUS)
-                    break;
                 PCIEPeer& peer = gpuInfo.pcies[gpuInfo.nPcies];
                 strncpy(peer.busId, allDevs[p].busId, BUSID_SZ - 1);
                 peer.nvmlTopoLevel = (int)lvl;
