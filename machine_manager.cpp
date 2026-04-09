@@ -8,7 +8,7 @@
 #include <set>
 #include <algorithm>
 #include <cassert>
-#include <iostream>
+#include <ostream>
 #include <iomanip>
 
 
@@ -52,16 +52,6 @@ void MachineManager::clearAll() {
 /* ==================================================================
  *  Helpers
  * ================================================================== */
-
-inline std::string busKey(const char* id) 
-{
-    std::string s(id);
-    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
-    auto p = s.find(':');
-    if (p != std::string::npos && p < 8)
-        s = std::string(8 - p, '0') + s;
-    return s;
-}
 
 inline bool sameBus(const char* a, const char* b) 
 {
@@ -280,53 +270,16 @@ CUDTXprocessorConnectionInfo MachineManager::query(
     return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
 }
 
-CUDTXprocessorConnectionInfo queryConnection(
-        const std::vector<MachineManager>& managers,
-        const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
-    uint32_t owner = std::min(a.memberId, b.memberId);
-    if (owner < 0 || owner >= (int)managers.size())
-        return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
-    return managers[owner].query(a, b);
-}
-
-/* ==================================================================
- *  printTopology
- * ================================================================== */
-
-struct GNode {
-    TopologyNode tnode;
-    std::string host;
-    std::string uuid, busId, name;
-    int numaId = -1;
-    std::vector<int> ownerRanks;
-
-    bool isGpu() const { return tnode.type == CUIDTX_PROCESSOR_TYPE_GPU; }
-
-    std::string nodeKey() const {
-        if (isGpu()) return uuid;
-        return host + ":numa" + std::to_string(numaId);
-    }
-};
 
 std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
     os << "  Member " << std::left << std::setw(3) << m.memberId_
        << " @ " << std::setw(20) << m.hostname_
        << "  " << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size() << " GPU, "
        << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size() << " CPU core\n";
-    for (const auto& p : m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU)) {
-        std::string hl = handleStr(p->publicHandle());
-        const GPUInfo& gi = p->info().gpu;
-        os << "    " << std::setw(12) << hl
-           << "  " << gi.busId << " [" << gi.name << "]";
-        if (p->info().numaId >= 0)
-            os << " NUMA:" << p->info().numaId;
-        os << '\n';
-    }
-    for (const auto& p : m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU)) {
-        std::string hl = handleStr(p->publicHandle());
-        os << "    " << std::setw(12) << hl
-           << "  NUMA " << p->info().numaId
-           << "  os_index " << p->info().cpu.osIndex << '\n';
+
+    for (const auto& [type, pvec] : m.processors()) {
+        for (const auto& proc : pvec)
+            os << *proc << '\n';
     }
     os << "\n  Topology (" << m.topologyMap_.size() << " entries):\n";
     for (const auto& [pair, ci] : m.topologyMap_) {
@@ -337,153 +290,3 @@ std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
     return os;
 }
 
-void printTopology(const std::vector<MachineManager>& managers) {
-    const int ws = (int)managers.size();
-
-    /* ---- 1. Deduplicated global node list ---- */
-    std::vector<GNode> G;
-    std::map<std::string, int> key2g;
-
-    for (int r = 0; r < ws; r++) {
-        const MachineManager& M = managers[r];
-        for (const auto& [type, pvec] : M.processors()) {
-            for (auto& np : pvec) {
-                GNode gn;
-                gn.tnode  = np->topologyNode();
-                gn.host   = M.hostname_;
-
-                if (gn.isGpu()) {
-                    const GPUInfo& gi = np->info().gpu;
-                    gn.uuid    = cuUuidToStr(gi.uuid);
-                    gn.busId   = gi.busId;
-                    gn.name    = gi.name;
-                }
-                gn.numaId = np->info().numaId;
-
-                std::string k = gn.nodeKey();
-                if (key2g.count(k) == 0) {
-                    key2g[k] = (int)G.size();
-                    G.push_back(gn);
-                }
-                G[key2g[k]].ownerRanks.push_back(r);
-            }
-        }
-    }
-
-    std::sort(G.begin(), G.end(), [](const GNode& a, const GNode& b) {
-        if (a.host != b.host) return a.host < b.host;
-        if (a.isGpu() != b.isGpu()) return a.isGpu() > b.isGpu();
-        if (a.isGpu())
-            return busKey(a.busId.c_str()) < busKey(b.busId.c_str());
-        return a.numaId < b.numaId;
-    });
-    key2g.clear();
-    for (int i = 0; i < (int)G.size(); i++) key2g[G[i].nodeKey()] = i;
-
-    int nGpus = 0, nCpus = 0;
-    for (auto& g : G) { if (g.isGpu()) nGpus++; else nCpus++; }
-    const int N = (int)G.size();
-
-    /* ---- 2. Build connection info matrix from topology maps ---- */
-    CUDTXprocessorConnectionInfo defaultConn = {CUDTX_PROCESSOR_CONNECTION_TYPE_SELF, -1.0f, false};
-    std::vector<std::vector<CUDTXprocessorConnectionInfo>> cinfo(
-        N, std::vector<CUDTXprocessorConnectionInfo>(N, defaultConn));
-
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            if (i == j) continue;
-            TopologyNode::Pair nodePair = canonicalPair(G[i].tnode, G[j].tnode);
-            int owner = nodePair.first.memberId;
-            auto it = managers[owner].topologyMap().find(nodePair);
-            if (it != managers[owner].topologyMap().end())
-                cinfo[i][j] = it->second;
-            else
-                cinfo[i][j] = {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
-        }
-    }
-
-    // short string matrix for display
-    std::vector<std::vector<std::string>> conn(N, std::vector<std::string>(N));
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < N; j++)
-            conn[i][j] = connInfoStr(cinfo[i][j]);
-
-    /* ---- 3. Print ---- */
-    printf("\n");
-    printf("=========================================================================\n");
-    printf("                    GLOBAL TOPOLOGY REPORT\n");
-    printf("=========================================================================\n");
-    printf("  %d rank(s),  %d GPU(s),  %d CPU NUMA node(s)\n", ws, nGpus, nCpus);
-    printf("  (mode: pre-collected data only)\n");
-
-    /* ---- All Unique Nodes ---- */
-    printf("\n--- All Unique Nodes (%d GPU, %d CPU NUMA) ---\n\n", nGpus, nCpus);
-    for (int i = 0; i < N; i++) {
-        const GNode& g = G[i];
-        std::string label = topoNodeStr(g.tnode);
-        if (g.isGpu()) {
-            printf("  %-12s  %-16s  %-24s  %-16s",
-                   label.c_str(), g.busId.c_str(), g.name.c_str(),
-                   g.host.c_str());
-            if (g.numaId >= 0) printf("  NUMA:%d", g.numaId);
-        } else {
-            printf("  %-12s  %-16s  %-24s  %-16s  NUMA %d",
-                   label.c_str(), "", "", g.host.c_str(), g.numaId);
-        }
-        printf("  Rank:");
-        for (size_t k = 0; k < g.ownerRanks.size(); k++)
-            printf(" %d", g.ownerRanks[k]);
-        printf("\n");
-    }
-
-    /* ---- Per-Manager Details ---- */
-    printf("\n--- Per-Manager Details ---\n");
-    for (int r = 0; r < ws; r++) {
-        std::cout << managers[r];
-    }
-
-    /* ---- Topology Matrix ---- */
-    printf("\n--- Topology Matrix ---\n");
-    printf("  Legend:  NVL = NVLink                  PIX = single PCIe switch\n");
-    printf("          PXB = multi PCIe switch       PHB = host bridge\n");
-    printf("          C2C = NVLink-C2C (GPU-CPU)    NODE = same NUMA\n");
-    printf("          SYS = cross-NUMA              NET  = cross-node\n");
-    printf("          (N) = bandwidth in GB/s    [A] = atomics supported\n\n");
-
-    std::vector<std::string> labels(N);
-    int maxLabelLen = 0;
-    for (int i = 0; i < N; i++) {
-        labels[i] = topoNodeStr(G[i].tnode);
-        maxLabelLen = std::max(maxLabelLen, (int)labels[i].size());
-    }
-    int cw = std::max(maxLabelLen + 2, 8);
-    int rw = maxLabelLen + 2;
-
-    printf("%-*s", rw, "");
-    for (int j = 0; j < N; j++) printf("%-*s", cw, labels[j].c_str());
-    printf("\n");
-    for (int i = 0; i < N; i++) {
-        printf("%-*s", rw, labels[i].c_str());
-        for (int j = 0; j < N; j++)
-            printf("%-*s", cw, conn[i][j].c_str());
-        printf("  [%s]\n", G[i].host.c_str());
-    }
-
-    /* ---- NVLink Summary ---- */
-    printf("\n--- NVLink Summary ---\n\n");
-    bool any = false;
-    for (int i = 0; i < N; i++)
-        for (int j = i + 1; j < N; j++)
-            if (cinfo[i][j].type == CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK) {
-                printf("  %s <-> %s : %-12s",
-                       labels[i].c_str(), labels[j].c_str(),
-                       conn[i][j].c_str());
-                if (G[i].isGpu() && G[j].isGpu())
-                    printf("  (%s <-> %s)", G[i].busId.c_str(), G[j].busId.c_str());
-                printf("\n");
-                any = true;
-            }
-    if (!any) printf("  (no NVLink connections detected)\n");
-
-    printf("\n=========================================================================\n\n");
-}

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pal.hpp"
+#include "processor.hpp"
 
 #include <string>
 #include <vector>
@@ -12,6 +12,15 @@
 inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
                                         const TopologyNode& b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+}
+
+inline std::string busKey(const char* id) {
+    std::string s(id);
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    auto p = s.find(':');
+    if (p != std::string::npos && p < 8)
+        s = std::string(8 - p, '0') + s;
+    return s;
 }
 
 struct MachineManager {
@@ -47,9 +56,3 @@ private:
             bool sameNode, const MachineManager& dstMgr) const;
 };
 
-CUDTXprocessorConnectionInfo queryConnection(
-        const std::vector<MachineManager>& managers,
-        const CUIDTXprocessor& a,
-        const CUIDTXprocessor& b);
-
-void printTopology(const std::vector<MachineManager>& managers);
