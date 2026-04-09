@@ -18,6 +18,8 @@ static constexpr int UUID_SZ        = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
 static constexpr int NAME_SZ        = 256;
 static constexpr int HOST_SZ        = 256;
 
+#define CUDTXmemberId uint32_t
+
 struct CUIDTXCpuSet
 {
     cpu_set_t cpuSet;
@@ -165,59 +167,6 @@ struct ProcessorInfo {
         CPUInfo cpu;
     };
 };
-
-struct TopologyNode
-{
-    uint32_t memberId;
-    CUIDTXprocessorType type;
-    int localId; // GPU: deviceId, CPU: numaId
-
-    TopologyNode(uint32_t memberId, CUIDTXprocessorType type, const ProcessorInfo &info)
-    : memberId(memberId)
-    , type(type)
-    {
-        switch (info.type) {
-            case CUIDTX_PROCESSOR_TYPE_GPU:
-                localId = static_cast<int>(info.gpu.deviceOrdinal);
-                break;
-            case CUIDTX_PROCESSOR_TYPE_CPU:
-                localId = info.numaId;
-                break;
-            default: localId = -1; break;
-        }
-    }
-
-    TopologyNode(uint32_t memberId, CUIDTXprocessorType type, int localId)
-        : memberId(memberId)
-        , type(type)
-        , localId(localId)
-    {
-    }
-
-    TopologyNode() : memberId(UINT32_MAX), type(CUIDTX_PROCESSOR_TYPE_MAX), localId(-1) {}
-
-    using Pair = std::pair<TopologyNode, TopologyNode>;
-
-    bool operator<(const TopologyNode& rhs) const noexcept {
-        if (memberId != rhs.memberId) return memberId < rhs.memberId;
-        if (type != rhs.type) return type < rhs.type;
-        return localId < rhs.localId;
-    }
-
-    bool operator==(const TopologyNode& rhs) const noexcept {
-        return memberId == rhs.memberId && type == rhs.type && localId == rhs.localId;
-    }
-
-    bool operator!=(const TopologyNode& rhs) const noexcept {
-        return !(*this == rhs);
-    }
-};
-
-inline std::string topoNodeStr(const TopologyNode& n) {
-    if (n.type == CUIDTX_PROCESSOR_TYPE_GPU)
-        return "GPU(" + std::to_string(n.memberId) + "," + std::to_string(n.localId) + ")";
-    return "CPU(" + std::to_string(n.memberId) + "," + std::to_string(n.localId) + ")";
-}
 
 /* ==================================================================
  *  Abstract interface — each device type implements this

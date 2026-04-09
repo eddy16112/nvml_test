@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pal.hpp"
+#include "topology_node.hpp"
 
 #include <ostream>
 
@@ -8,7 +9,7 @@ class Processor {
 public:
     Processor(const ProcessorInfo &info, uint32_t memberId)
     : info_(info)
-    , topologyNode_(memberId, info.type, info)
+    , topologyNode_(memberId, info)
     {
         std::memset(&handle_, 0, sizeof(handle_));
         handle_.memberId = memberId;
@@ -31,11 +32,5 @@ private:
     ProcessorInfo info_ {};
     TopologyNode topologyNode_;
 };
-
-inline std::string handleStr(const CUIDTXprocessor& h) {
-    if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
-        return "GPU(" + std::to_string(h.memberId) + "," + std::to_string(h.gpu.deviceOrdinal) + ")";
-    return "CPU(" + std::to_string(h.memberId) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
-}
 
 std::ostream& operator<<(std::ostream& os, const Processor& p);

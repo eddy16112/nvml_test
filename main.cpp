@@ -35,6 +35,12 @@ static constexpr int MAX_TOPO_PAIRS = 512;
 
 static int gRank = 0;
 
+static std::string handleStr(const CUIDTXprocessor& h) {
+    if (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
+        return "GPU(" + std::to_string(h.memberId) + "," + std::to_string(h.gpu.deviceOrdinal) + ")";
+    return "CPU(" + std::to_string(h.memberId) + "," + std::to_string(h.cpu.cpuOrdinal) + ")";
+}
+
 /* Fixed-size POD wire block: MPI_Allgather(MPI_BYTE, sizeof(RankDataWire)). */
 
 struct TopoEntryWire {

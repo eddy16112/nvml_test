@@ -21,7 +21,7 @@ if(NOT TARGET CUDA::cuda_driver)
         "cuDeviceGet / cuInit require libcuda (driver API).")
 endif()
 
-add_executable(gpu_topo main.cpp machine_manager.cpp processor.cpp pal.cpp)
+add_executable(gpu_topo main.cpp machine_manager.cpp processor.cpp pal.cpp topology_node.cpp)
 
 target_link_libraries(gpu_topo PRIVATE
     MPI::MPI_CXX
