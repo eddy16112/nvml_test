@@ -20,8 +20,8 @@ inline TopologyNode::Pair canonicalPair(const TopologyNode& a,
 }
 
 inline std::string getHostId() {
-    char hostbuf[HOST_SZ]{};
-    gethostname(hostbuf, HOST_SZ);
+    char hostbuf[256]{};
+    gethostname(hostbuf, sizeof(hostbuf));
     std::string id(hostbuf);
     FILE* f = fopen("/proc/sys/kernel/random/boot_id", "r");
     if (f) {

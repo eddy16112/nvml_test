@@ -16,8 +16,6 @@ static constexpr int BUSID_SZ       = NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE;
 static constexpr int GPU_UUID_SZ    = NVML_DEVICE_UUID_V2_BUFFER_SIZE;
 static constexpr int FABRIC_UUID_SZ = NVML_GPU_FABRIC_UUID_LEN;
 static constexpr int NAME_SZ        = 256;
-static constexpr int HOST_SZ        = 256;
-
 #define CUDTXmemberId uint32_t
 
 struct CUIDTXCpuSet
@@ -102,14 +100,16 @@ inline std::string cuUuidToStr(const CUuuid& u) {
  *  POD structures — safe for MPI_Allgather as MPI_BYTE
  * ================================================================== */
 
-struct GPUPeer {
+struct GPUPeer 
+{
     char busId[BUSID_SZ];
     int32_t nvLinkCount;      // direct NVLink lanes to this peer, 0 if none
     nvmlGpuTopologyLevel_t nvmlTopoLevel;    // PCIe topology level, -1 if not on same node
     bool atomicsSupported;
 };
 
-struct GPUInfo {
+struct GPUInfo 
+{
     CUdevice   deviceOrdinal;
     CUuuid     uuid;
     char       busId[BUSID_SZ];
@@ -139,7 +139,8 @@ enum CUIDTXprocessorType : uint8_t {
     CUIDTX_PROCESSOR_TYPE_MAX = 0xFF
 };
 
-struct CUIDTXprocessor {
+struct CUIDTXprocessor 
+{
     uint32_t memberId;
     union {
         struct { CUdevice deviceOrdinal; } gpu;
@@ -148,7 +149,8 @@ struct CUIDTXprocessor {
     CUIDTXprocessorType type;
 };
 
-struct ProcessorInfo {
+struct ProcessorInfo 
+{
     CUIDTXprocessorType type;
     int numaId; // NUMA node for both GPU and CPU (-1 if unknown)
     union {

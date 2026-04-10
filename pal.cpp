@@ -159,19 +159,25 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                 fvs[1].fieldId = NVML_FI_DEV_C2C_LINK_GET_MAX_BW;
                 nvmlDeviceGetFieldValues(hDev, 2, fvs);
                 unsigned int nLinks = 1;
-                if (fvs[0].nvmlReturn == NVML_SUCCESS && fvs[0].value.uiVal > 0)
+                if (fvs[0].nvmlReturn == NVML_SUCCESS && fvs[0].value.uiVal > 0) {
                     nLinks = fvs[0].value.uiVal;
-                if (fvs[1].nvmlReturn == NVML_SUCCESS)
+                }
+                if (fvs[1].nvmlReturn == NVML_SUCCESS) {
                     gpuInfo.c2cBwGBps = nLinks * fvs[1].value.uiVal / 1000.0f;
+                }
             }
 
             // NVSwitch fabric cluster UUID + clique ID
-            gpuInfo.hasFabricInfo = false;
-            memset(gpuInfo.clusterUuid, 0, FABRIC_UUID_SZ);
-            gpuInfo.cliqueId = 0;
             {
-                nvmlGpuFabricInfo_t fabricInfo{};
-                if (nvmlDeviceGetGpuFabricInfo(hDev, &fabricInfo) == NVML_SUCCESS &&
+#ifdef nvmlGpuFabricInfo_v3
+                nvmlGpuFabricInfo_v3_t fabricInfo{};
+                fabricInfo.version = nvmlGpuFabricInfo_v3;
+#else
+                nvmlGpuFabricInfo_v2_t fabricInfo{};
+                fabricInfo.version = nvmlGpuFabricInfo_v2;
+#endif
+                if (nvmlDeviceGetGpuFabricInfoV(hDev,
+                        reinterpret_cast<nvmlGpuFabricInfoV_t*>(&fabricInfo)) == NVML_SUCCESS &&
                     fabricInfo.state == NVML_GPU_FABRIC_STATE_COMPLETED &&
                     fabricInfo.status == NVML_SUCCESS) {
                     memcpy(gpuInfo.clusterUuid, fabricInfo.clusterUuid, FABRIC_UUID_SZ);
