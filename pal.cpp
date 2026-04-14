@@ -166,7 +166,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
                     nLinks = fvs[0].value.uiVal;
                 }
                 if (fvs[1].nvmlReturn == NVML_SUCCESS) {
-                    gpuInfo.c2cBwGBps = nLinks * fvs[1].value.uiVal / 1000.0f;
+                    gpuInfo.c2cBwGBps = static_cast<float>(nLinks) * fvs[1].value.uiVal / 1000.0f;
                 }
             }
 
