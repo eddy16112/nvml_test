@@ -23,6 +23,10 @@ public:
         }
     }
 
+    [[nodiscard]] CUIDTXprocessorType type() const noexcept
+    {
+        return handle_.type;
+    }
     const CUIDTXprocessor& publicHandle() const { return handle_; }
     const ProcessorInfo& info() const { return info_; }
     const TopologyNode& topologyNode() const { return topologyNode_; }

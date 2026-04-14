@@ -78,8 +78,10 @@ struct MachineManager {
     const ProcessorMap& processors() const { return processors_; }
     const TopologyMap& topologyMap() const { return topologyMap_; }
 
-    void addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p);
-    void addTopologyEntry(const TopologyNode::Pair& pair, const CUDTXprocessorConnectionInfo& ci);
+    // Load processors from a list of processors. This is used to load processors from a remote machine.
+    // The list could contain processors of different types.
+    void loadFromProcessors(const Processor *processors, size_t numProcessors);
+
     friend std::ostream& operator<<(std::ostream& os, const MachineManager& m);
 
 private:

@@ -82,10 +82,12 @@ static void packToWire(const MachineManager& M, RankDataWire& w) {
 
 static MachineManager unpackFromWire(const RankDataWire& w) {
     MachineManager M(w.rank, w.hostId);
+    std::vector<Processor> procs;
+    procs.reserve(w.nNodes);
     for (int i = 0; i < w.nNodes; i++) {
-        M.addProcessor(w.nodes[i].type,
-                       std::make_unique<Processor>(w.nodes[i], w.rank));
+        procs.emplace_back(w.nodes[i], w.rank);
     }
+    M.loadFromProcessors(procs.data(), procs.size());
     return M;
 }
 

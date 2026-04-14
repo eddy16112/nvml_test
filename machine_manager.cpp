@@ -24,6 +24,29 @@ void MachineManager::loadPAL(IProcessorAbstractionLayer &pal)
     }
 }
 
+void MachineManager::loadFromProcessors(const Processor *processors, size_t numProcessors)
+{
+    std::unordered_map<CUIDTXprocessorType, size_t> counts;
+    counts.reserve(numProcessors);
+    for (size_t i = 0; i < numProcessors; i++) {
+        const Processor &processor = processors[i];
+        if (processor.publicHandle().memberId != memberId_) {
+            throw std::runtime_error("Processor member ID mismatch");
+        }
+        counts[processor.type()]++;
+    }
+
+    for (const std::pair<const CUIDTXprocessorType, size_t> &entry : counts) {
+        std::vector<std::unique_ptr<Processor>> &bucket = processors_[entry.first];
+        bucket.reserve(bucket.size() + entry.second);
+    }
+
+    for (size_t i = 0; i < numProcessors; i++) {
+        const Processor &processor = processors[i];
+        processors_[processor.type()].emplace_back(std::make_unique<Processor>(processor));
+    }
+}
+
 const std::vector<std::unique_ptr<Processor>> &MachineManager::getProcessorsByType(CUIDTXprocessorType type) const
 {
     auto it = processors_.find(type);
@@ -35,14 +58,7 @@ const std::vector<std::unique_ptr<Processor>> &MachineManager::getProcessorsByTy
     return empty;
 }
 
-void MachineManager::addProcessor(CUIDTXprocessorType type, std::unique_ptr<Processor> p) {
-    processors_[type].emplace_back(std::move(p));
-}
 
-void MachineManager::addTopologyEntry(const TopologyNode::Pair& pair,
-                                      const CUDTXprocessorConnectionInfo& ci) {
-    topologyMap_[pair] = ci;
-}
 
 
 /* ==================================================================
