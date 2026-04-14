@@ -49,11 +49,6 @@ void MachineManager::addTopologyEntry(const TopologyNode::Pair& pair,
  *  Helpers
  * ================================================================== */
 
-inline bool sameBus(const char* a, const char* b) 
-{
-    return busKey(a) == busKey(b);
-}
-
 static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
     switch (t) {
         case 0:  return CUDTX_PROCESSOR_CONNECTION_TYPE_SELF;
@@ -67,6 +62,9 @@ static CUDTXprocessorConnectionType pcieTopoToConnType(int t) {
 }
 
 static const GPUPeer* findGpuPeer(const GPUInfo& gi, const char* peerBusId) {
+    auto sameBus = [](const char* a, const char* b) {
+        return busKey(a) == busKey(b);
+    };
     for (int k = 0; k < gi.nGPUPeers; k++)
         if (sameBus(gi.gpuPeers[k].busId, peerBusId))
             return &gi.gpuPeers[k];
@@ -233,20 +231,24 @@ void MachineManager::buildTopology(const MachineManager& dst) {
  *  queryConnection
  * ================================================================== */
 
-static TopologyNode toTopoNode(const CUIDTXprocessor& h) {
-    int localId = (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
-                  ? h.gpu.deviceOrdinal
-                  : h.cpu.cpuOrdinal;
-    return TopologyNode(h.memberId, h.type, localId);
+ResultOr<CUDTXprocessorConnectionInfo>
+MachineManager::lookupTopology(const TopologyNode &a, const TopologyNode &b) const noexcept
+{
+    TopologyNode::Pair key = canonicalPair(a, b);
+    TopologyMap::const_iterator it = topologyMap_.find(key);
+    if (it != topologyMap_.end()) {
+        return it->second;
+    }
+    return CUDTX_ERROR;
 }
 
-CUDTXprocessorConnectionInfo MachineManager::query(
-        const CUIDTXprocessor& a, const CUIDTXprocessor& b) const {
-    TopologyNode ta = toTopoNode(a);
-    TopologyNode tb = toTopoNode(b);
-    auto it = topologyMap_.find(canonicalPair(ta, tb));
-    if (it != topologyMap_.end()) return it->second;
-    return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
+ResultOr<CUDTXprocessorConnectionInfo>
+MachineManager::getTopology(const Processor &src, const Processor &dst) const noexcept
+{
+    if (src.topologyNode().memberId != memberId_) {
+        return CUDTX_ERROR;
+    }
+    return lookupTopology(src.topologyNode(), dst.topologyNode());
 }
 
 std::ostream& operator<<(std::ostream& os, const MachineManager& m) {

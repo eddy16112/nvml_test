@@ -112,13 +112,22 @@ static void exchangeRankData(const MachineManager& local,
  *  queryConnection / printTopology
  * ================================================================== */
 
+static TopologyNode toTopoNode(const CUIDTXprocessor& h) {
+    int localId = (h.type == CUIDTX_PROCESSOR_TYPE_GPU)
+                  ? h.gpu.deviceOrdinal
+                  : h.cpu.cpuOrdinal;
+    return TopologyNode(h.memberId, h.type, localId);
+}
+
 static CUDTXprocessorConnectionInfo queryConnection(
         const std::vector<MachineManager>& managers,
         const CUIDTXprocessor& a, const CUIDTXprocessor& b) {
     uint32_t owner = std::min(a.memberId, b.memberId);
     if (owner >= (uint32_t)managers.size())
         return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
-    return managers[owner].query(a, b);
+    auto result = managers[owner].lookupTopology(toTopoNode(a), toTopoNode(b));
+    if (result.ok()) return *result;
+    return {CUDTX_PROCESSOR_CONNECTION_TYPE_MAX, -1.0f, false};
 }
 
 struct GNode {

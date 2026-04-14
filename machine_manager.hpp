@@ -1,6 +1,7 @@
 #pragma once
 
 #include "processor.hpp"
+#include "result_or.hpp"
 
 #include <cstdio>
 #include <cstdint>
@@ -68,8 +69,11 @@ struct MachineManager {
     
     void buildTopology(const MachineManager& dst);
 
-    CUDTXprocessorConnectionInfo query(const CUIDTXprocessor& a,
-                                       const CUIDTXprocessor& b) const;
+    ResultOr<CUDTXprocessorConnectionInfo>
+    lookupTopology(const TopologyNode& a, const TopologyNode& b) const noexcept;
+
+    ResultOr<CUDTXprocessorConnectionInfo>
+    getTopology(const Processor& src, const Processor& dst) const noexcept;
 
     const ProcessorMap& processors() const { return processors_; }
     const TopologyMap& topologyMap() const { return topologyMap_; }
