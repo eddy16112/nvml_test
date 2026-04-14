@@ -213,13 +213,14 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
             // NVLink enumeration: count NVSwitch lanes and overlay
             // direct-GPU link counts onto the existing GpuPeer entries.
-            unsigned int nLinks = NVML_NVLINK_MAX_LINKS;
+            unsigned int nLinks = 0;
             {
-                nvmlFieldValue_t fv{};
+                nvmlFieldValue_t fv {};
                 fv.fieldId = NVML_FI_DEV_NVLINK_LINK_COUNT;
                 nvmlDeviceGetFieldValues(hDev, 1, &fv);
-                if (fv.nvmlReturn == NVML_SUCCESS && fv.value.uiVal > 0)
+                if (fv.nvmlReturn == NVML_SUCCESS) {
                     nLinks = fv.value.uiVal;
+                }
             }
             for (unsigned l = 0; l < nLinks; l++) {
                 nvmlEnableState_t st;
