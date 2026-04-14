@@ -76,6 +76,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
         nvmlPciInfo_t pci;
         PAL_CHK_NVML(nvmlDeviceGetPciInfo_v3(allDevs[i].handle, &pci));
         strncpy(allDevs[i].busId, pci.busId, BUSID_SZ - 1);
+        allDevs[i].busId[BUSID_SZ - 1] = '\0';
         PAL_CHK_NVML(nvmlDeviceGetUUID(allDevs[i].handle, allDevs[i].uuid, GPU_UUID_SZ));
     }
 
@@ -86,7 +87,6 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
     for (int ci = 0; ci < nGpus; ci++) {
         ProcessorInfo info{};
         info.type = CUIDTX_PROCESSOR_TYPE_GPU;
-        info.numaId = -1;
         GPUInfo& gpuInfo = info.gpu;
         CUdevice cuDevice{};
         PAL_CHK_CU(cuDeviceGet(&cuDevice, ci));
@@ -109,6 +109,7 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
 
             gpuInfo.uuid = cuUuid;
             strncpy(gpuInfo.busId, allDevs[k].busId, BUSID_SZ - 1);
+            gpuInfo.busId[BUSID_SZ - 1] = '\0';
             PAL_CHK_NVML(nvmlDeviceGetName(hDev, gpuInfo.name, NAME_SZ));
 
             bool hasC2C = false;
@@ -143,11 +144,13 @@ std::vector<ProcessorInfo> CudaPAL::enumerateProcessors() {
             {
                 unsigned int gen = 0, width = 0;
                 if (nvmlDeviceGetMaxPcieLinkGeneration(hDev, &gen) == NVML_SUCCESS &&
-                    nvmlDeviceGetMaxPcieLinkWidth(hDev, &width) == NVML_SUCCESS && gen > 0) {
-                    static const float kGenGBpsPerLane[] =
-                        { 0, 0.25f, 0.5f, 0.985f, 1.969f, 3.938f, 7.877f };
-                    float perLane = (gen < 7) ? kGenGBpsPerLane[gen] : 0;
-                    gpuInfo.pcieBwGBps = perLane * width;
+                    nvmlDeviceGetMaxPcieLinkWidth(hDev, &width) == NVML_SUCCESS && gen > 0) 
+                {
+                    static const float kGenGBpsPerLane[] = { 0, 0.25f, 0.5f, 0.985f, 1.969f, 3.938f, 7.877f };
+                    static constexpr unsigned int kMaxKnownGen = sizeof(kGenGBpsPerLane) / sizeof(kGenGBpsPerLane[0]);
+                    if (gen < kMaxKnownGen) {
+                        gpuInfo.pcieBwGBps = kGenGBpsPerLane[gen] * width;
+                    }
                 }
             }
 
@@ -323,7 +326,7 @@ std::vector<ProcessorInfo> CPUPAL::enumerateProcessors()
                 info.cpu.cpuOrdinal = cpuOrdinal;
                 info.cpu.cpuset = core_cpuset;
                 const hwloc_nodeset_t nodeset = core->nodeset ? core->nodeset : core->complete_nodeset;
-                info.numaId = static_cast<int32_t>(hwloc_bitmap_first(nodeset));
+                info.numaId = hwloc_bitmap_first(nodeset);
                 infos.push_back(info);
                 cpuOrdinal++;
             }
