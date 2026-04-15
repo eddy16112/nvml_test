@@ -43,6 +43,20 @@ inline uint64_t hashHostId(const std::string& id) {
     return h;
 }
 
+inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
+    switch (t) {
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_SELF:   return "X";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_PIX:    return "PIX";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_PXB:    return "PXB";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_PHB:    return "PHB";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK: return "NVL";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_NODE:   return "NODE";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM: return "SYS";
+        case CUDTX_PROCESSOR_CONNECTION_TYPE_C2C:    return "C2C";
+        default:                                     return "NET";
+    }
+}
+
 inline std::string busKey(const char* id) {
     std::string s(id);
     for (auto& c : s) c = (char)std::tolower((unsigned char)c);

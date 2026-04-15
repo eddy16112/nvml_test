@@ -68,22 +68,8 @@ typedef enum CUDTXprocessorConnectionType_enum {
 typedef struct CUDTXprocessorConnectionInfo_st {
     CUDTXprocessorConnectionType type;
     float bandwidth; // GB/s, -1 if unknown/not applicable
-    bool supportAtomics;
+    int supportAtomics;
 } CUDTXprocessorConnectionInfo;
-
-inline const char* connTypeTag(CUDTXprocessorConnectionType t) {
-    switch (t) {
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_SELF:   return "X";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_PIX:    return "PIX";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_PXB:    return "PXB";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_PHB:    return "PHB";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_NVLINK: return "NVL";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_NODE:   return "NODE";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_SYSTEM:    return "SYS";
-        case CUDTX_PROCESSOR_CONNECTION_TYPE_C2C:    return "C2C";
-        default:                                     return "NET";
-    }
-}
 
 
 inline std::string cuUuidToStr(const CUuuid& u) {

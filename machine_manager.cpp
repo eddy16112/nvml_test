@@ -164,7 +164,7 @@ static CUDTXprocessorConnectionInfo resolveGpuGpu(
     }
 
     CUDTXprocessorConnectionInfo pcie = resolvePcie(src, dst);
-    printf("    → PCIe = %s\n", connTypeTag(pcie.type));
+    printf("    → PCIe = %d\n", pcie.type);
     return pcie;
 }
 
@@ -273,7 +273,7 @@ std::ostream& operator<<(std::ostream& os, const MachineManager& m) {
        << "  " << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_GPU).size() << " GPU, "
        << m.getProcessorsByType(CUIDTX_PROCESSOR_TYPE_CPU).size() << " CPU core\n";
 
-    for (const auto& [type, pvec] : m.processors()) {
+    for (const auto& [type, pvec] : m.processors_) {
         for (const auto& proc : pvec)
             os << *proc << '\n';
     }

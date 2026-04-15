@@ -16,3 +16,11 @@ TopologyNode::TopologyNode(CUDTXmemberId memberId, const ProcessorInfo &info)
         default: throw std::invalid_argument("Unsupported processor type"); break;
     }
 }
+
+std::ostream& operator<<(std::ostream& os, const TopologyNode& n) {
+    if (n.type == CUIDTX_PROCESSOR_TYPE_GPU)
+        os << "GPU(" << n.memberId << "," << n.localId << ")";
+    else
+        os << "CPU(" << n.memberId << "," << n.localId << ")";
+    return os;
+}
